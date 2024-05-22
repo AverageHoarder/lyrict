@@ -4,9 +4,9 @@
 I initially wrote this as a testing tool to find unlinked .lrc files in my music library. The only link between .lrc and audio files is an identical base name. When audio files are automatically renamed through software but the .lrc files are not, this link can break.<br>
 In test mode, the script will recursively scan a given directory for .lrc files (synced lyrics) and .txt files (unsynced lyrics). It then finds matching music files (default: flac and mp3) and logs those .lrc and .txt files without matching audio files as unlinked. It can also log all matches (sorted by filetype) as lists of paths to disk in case these are wanted for further processing in other software.
 
-Later on I added another mode that utilizes [mp3tags](https://www.mp3tag.de/en/) (limited) cli functionality to open all audio files that do have synced or unsynced external lyrics in mp3tag (Windows/Mac only). The mp3tag mode can create actions for mp3tag that allow an easy way to back up existing embedded lyrics, embed the external lyrics and then delete the previously created backups.<br>
-This mode is customizable and flexible concerning the used tags and only limited by mp3tags internal mappings and supported tags.<br>
-However mp3tag does not support the SYLT frame of mp3 files, where synced lyrics are saved as per specification and exporting lyrics from within mp3tag to external lyrics is also not easily done. This mode also cannot delete the external lyrics files after embedding them.
+Later on I added another mode that utilizes [Mp3tags](https://www.mp3tag.de/en/) (limited) cli functionality to open all audio files that do have synced or unsynced external lyrics in Mp3tag (Windows/Mac only). The mp3tag mode can create actions for Mp3tag that allow an easy way to back up existing embedded lyrics, embed the external lyrics and then delete the previously created backups.<br>
+This mode is customizable and flexible concerning the used tags and only limited by Mp3tags internal mappings and supported tags.<br>
+However Mp3tag does not support the SYLT frame of mp3 files, where synced lyrics are saved as per specification and exporting lyrics from within Mp3tag to external lyrics is also not easily done. This mode also cannot delete the external lyrics files after embedding them.
 
 Which led me to create the third mode, export mode. Export mode uses [mutagen](https://mutagen.readthedocs.io/en/latest/) to scan all audio files in a given directory for embedded lyrics, both synced and unsynced, and can then export these tags to external .lrc and .txt files. This mode does support both LYRICS and UNSYNCEDLYRICS vorbis tags (flac files) and SYLT and USLT frames (mp3 files). For mp3 files it also exports the vorbis tag LYRICS as some people prefer it over the restrictive SYLT frame. It can also purge the existing embedded lyrics after a successful export.
 
@@ -31,11 +31,11 @@ All modes support logging and can show progress bars for most of the steps.
   
 **What can the mp3tag mode do?**
   * everything the test mode does plus:
-  * open only music files with linked external lyrics in mp3tag
-  * create action for mp3tag to back up existing embedded lyrics
-  * create actions for mp3tag to embed external lyrics, both .lrc and .txt (overwrites embedded lyrics)
-  * create action for mp3tag to delete previously created lyrics backup
-  * supports all tags and audio formats that mp3tag does (for better and for worse)
+  * open only music files with linked external lyrics in Mp3tag
+  * create action for Mp3tag to back up existing embedded lyrics
+  * create actions for Mp3tag to embed external lyrics, both .lrc and .txt (overwrites embedded lyrics)
+  * create action for Mp3tag to delete previously created lyrics backup
+  * supports all tags and audio formats that Mp3tag does (for better and for worse)
   
 **What can the import mode do?**
   * everything the test mode does plus:
@@ -62,10 +62,10 @@ All modes support logging and can show progress bars for most of the steps.
 
 **Optional:**
 1. when using `-p` to show progress bars, [tqdm](https://github.com/tqdm/tqdm) must be installed, I used `pip3 install tqdm`
-2. when using `-m mp3tag` as mode, [mp3tags](https://www.mp3tag.de/en/) must be installed and on PATH
+2. when using `-m mp3tag` as mode, [Mp3tag](https://www.mp3tag.de/en/) must be installed and on PATH
 3. when using `-m import` or `-m export` as mode, [mutagen](https://mutagen.readthedocs.io/en/latest/) must be installed, I used `pip3 install mutagen`
 
-If mp3tag is not on PATH, the script will complain and (if on Windows) open the environment variables settings with instructions on how to add it to PATH.
+If Mp3tag is not on PATH, the script will complain and (if on Windows) open the environment variables settings with instructions on how to add it to PATH.
 
 ### Downloading the script
 
@@ -101,9 +101,9 @@ options:
                         The directory to save logs to when used with -l or -ll, defaults to "."
   -m {export,import,mp3tag,test}
                         Mode, use 'test' to only log linked/unlinked songs to console or to file(s) when used with -l or -ll. Use 'mp3tag' to embed external
-                        lyrics (.txt/.lrc) in audio tags via mp3tag. Use 'import' to embed external lyrics (.txt/.lrc) in audio tags via mutagen. Use 'export'
+                        lyrics (.txt/.lrc) in audio tags via Mp3tag. Use 'import' to embed external lyrics (.txt/.lrc) in audio tags via mutagen. Use 'export'
                         to export embedded tags to external files (.lrc/.txt) via mutagen.
-  -o, --overwrite       mp3tag: Overwrite/recreate the mp3tag actions to reflect changes made in the config section. Import: Purge and overwrite existing
+  -o, --overwrite       mp3tag: Overwrite/recreate the Mp3tag actions to reflect changes made in the config section. Import: Purge and overwrite existing
                         embedded lyrics tags (LYRICS/UNSYNCEDLYRICS/SYLT/USLT) Export: Overwrite the content of existing .lrc/.txt files.
   -p, --progress        Show progress bars. Useful for huge directories. Requires tqdm, use "pip3 install tqdm" to install it.
   -s, --single_folder   Test, Import, mp3tag: Only scans a single folder for .lrc and .txt files, no subdirectories. Export: Only scans a single folder for
@@ -121,13 +121,13 @@ Then this mode tries to find matching audio files, testing all extensions passed
 Per default only unlinked songs (where no match was found) are logged to console.
 
 **When called with -m mp3tag**<br>
-**mp3tag Mode (requires mp3tag, Windows/Mac only):**<br>
-This does everything that Test Mode does and then opens only the songs with linked external lyrics in mp3tag. Before that it checks if mp3tag is on PATH and instructs the user on how to add it to PATH if it is not.<br>
-Then it asks to create 4 actions for mp3tag. They can back up existing embedded lyrics, embed .lrc files and .txt files to audio tags and lastly delete previously created backups.  
-Both the names of the actions that will be created and the tags the actions should backup and embed to, are configurable in the CONFIG section at the top of the script. The default tag for synced lyrics is the vorbis tag LYRICS, for unsynced lyrics the default tag is UNSYNCEDLYRICS which mp3tag internally maps to the USLT frame for mp3 files.<br>
-When using this mode you have to be aware of the **internal mappings** of mp3tag to ensure that the tags end up what you want them to be.<br>
-The SYLT frame for example is **not supported** in mp3tag, therefore synced lyrics will also be embedded to the LYRICS vorbis tag for mp3 files.<br>
-The actions in mp3tag will always overwrite existing embedded tags. They also cannot delete the external lyrics files after embedding them.
+**mp3tag Mode (requires Mp3tag, Windows/Mac only):**<br>
+This does everything that Test Mode does and then opens only the songs with linked external lyrics in Mp3tag. Before that it checks if Mp3tag is on PATH and instructs the user on how to add it to PATH if it is not.<br>
+Then it asks to create 4 actions for Mp3tag. They can back up existing embedded lyrics, embed .lrc files and .txt files to audio tags and lastly delete previously created backups.  
+Both the names of the actions that will be created and the tags the actions should backup and embed to, are configurable in the CONFIG section at the top of the script. The default tag for synced lyrics is the vorbis tag LYRICS, for unsynced lyrics the default tag is UNSYNCEDLYRICS which Mp3tag internally maps to the USLT frame for mp3 files.<br>
+When using this mode you have to be aware of the **internal mappings** of Mp3tag to ensure that the tags end up what you want them to be.<br>
+The SYLT frame for example is **not supported** in Mp3tag, therefore synced lyrics will also be embedded to the LYRICS vorbis tag for mp3 files.<br>
+The actions in Mp3tag will always overwrite existing embedded tags. They also cannot delete the external lyrics files after embedding them.
 
 **When called with -m import**<br>
 **Import Mode (requires mutagen):**<br>
@@ -191,14 +191,14 @@ Only used when -p is also provided. Guess the number of files in the music direc
 * log to combined logs, show progress bars, specify a directory to scan and extensions to match<br>
 `lyrict.py -m test -lp -d "D:\Test" -e flac mp3 ogg m4a`
 
-### Case 2: mp3tag mode, opening linked songs in mp3tag to embed lyrics:
-* log unlinked lyrics to console, open linked songs in mp3tag<br>
+### Case 2: mp3tag mode, opening linked songs in Mp3tag to embed lyrics:
+* log unlinked lyrics to console, open linked songs in Mp3tag<br>
 `lyrict.py -m mp3tag`
 
-* log to combined logs and open linked songs in mp3tag<br>
+* log to combined logs and open linked songs in Mp3tag<br>
 `lyrict.py -m mp3tag -l`
   
-* overwrite/recreate mp3tag actions and show progress bars<br>
+* overwrite/recreate Mp3tag actions and show progress bars<br>
 `lyrict.py -m mp3tag -op`
 
 * show progress bars, specify a directory to scan and extensions to match<br>
@@ -232,7 +232,7 @@ Only used when -p is also provided. Guess the number of files in the music direc
 
 ## How to tweak behavior
 
-* If you want to change the mp3tag action names or the tags used for synced and unsynced lyrics in mp3tag, modify the config section at the top of the script.
+* If you want to change the Mp3tag action names or the tags used for synced and unsynced lyrics in Mp3tag, modify the config section at the top of the script.
 
 * During scanning, if your music files are named in a different pattern than "01 Hello.flac", you can edit the regular expression in this line to change the .txt matching:<br>
 `pattern = r'^\d{2,3}\s'` replacing the regex with `r'^\d{2,3}_'` for example would match "01_Hello.flac" instead of "01 Hello.flac".
@@ -254,7 +254,7 @@ Also find `lrc_line = f"{lrc_timestamp}{text}"` and change "{lrc_timestamp}{text
 
  * During export, when an mp3 file and a flac file with identical path and basename both have synced or unsynced lyrics embedded, only the lyrics of one of them will be written to .lrc and .txt, the other one will be skipped or overwritten if -o, --overwrite is used. Assuming that they are the same song with identical lyrics, this should also not matter.
  
- * mp3tag does not support the SYLT frame. This means that when performing certain actions on mp3 files containing a SYLT frame in mp3tag, that frame can be lost. (removing the tags and then undoing that step for example deletes the SYLT frame as it is not written back).
+ * Mp3tag does not support the SYLT frame. This means that when performing certain actions on mp3 files containing a SYLT frame in Mp3tag, that frame can be lost. (removing the tags and then undoing that step for example deletes the SYLT frame as it is not written back).
  
  * During import, when embedding synced lyrics from .lrc files to SYLT frames in mp3 files, any lines that do not match `[00:00.00] Text` `[0:00.000]Text` or a mixture of both WILL BE LOST. This is a limitation of the SYLT frame.
  
