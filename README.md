@@ -1,26 +1,28 @@
 # lyrict
 ## Python script to recursively check, standardize, import and export embedded and external synced and unsynced lyrics of audio files.
 
-I initially wrote this as a testing tool to find unlinked .lrc files in my music library. The only link between .lrc and audio files is an identical base name. When audio files are automatically renamed through software but the .lrc files are not, this link can break.
+I initially wrote this as a testing tool to find unlinked .lrc files in my music library. The only link between .lrc and audio files is an identical base name. When audio files are automatically renamed through software but the .lrc files are not, this link can break.<br>
 In test mode, the script will recursively scan a given directory for .lrc files (synced lyrics) and .txt files (unsynced lyrics). It then finds matching music files (default: flac and mp3) and logs those .lrc and .txt files without matching audio files as unlinked. It can also log all matches (sorted by filetype) as lists of paths to disk in case these are wanted for further processing in other software.
 
-Later on I added another mode that utilizes [mp3tags](https://www.mp3tag.de/en/) (limited) cli functionality to open all audio files that do have synced or unsynced external lyrics in mp3tag (Windows/Mac only). The mp3tag mode can create actions for mp3tag that allow an easy way to back up existing embedded lyrics, embed the external lyrics and then delete the previously created backups.  
-This mode is customizable and flexible concerning the used tags and only limited by mp3tags internal mappings and supported tags.
+Later on I added another mode that utilizes [mp3tags](https://www.mp3tag.de/en/) (limited) cli functionality to open all audio files that do have synced or unsynced external lyrics in mp3tag (Windows/Mac only). The mp3tag mode can create actions for mp3tag that allow an easy way to back up existing embedded lyrics, embed the external lyrics and then delete the previously created backups.<br>
+This mode is customizable and flexible concerning the used tags and only limited by mp3tags internal mappings and supported tags.<br>
 However mp3tag does not support the SYLT frame of mp3 files, where synced lyrics are saved as per specification and exporting lyrics from within mp3tag to external lyrics is also not easily done. This mode also cannot delete the external lyrics files after embedding them.
 
 Which led me to create the third mode, export mode. Export mode uses [mutagen](https://mutagen.readthedocs.io/en/latest/) to scan all audio files in a given directory for embedded lyrics, both synced and unsynced, and can then export these tags to external .lrc and .txt files. This mode does support both LYRICS and UNSYNCEDLYRICS vorbis tags (flac files) and SYLT and USLT frames (mp3 files). For mp3 files it also exports the vorbis tag LYRICS as some people prefer it over the restrictive SYLT frame. It can also purge the existing embedded lyrics after a successful export.
 
 The latest addition was a fourth mode, import mode. Import mode also uses mutagen to import .lrc and .txt lyrics into flac and mp3 files and is currently rigid. For flac files it uses LYRICS/UNSYNCEDLYRICS vorbis tags and for mp3 files it uses the SYLT/USLT frames to embed lyrics. It can delete the external lyrics files after a successful import.
 
-Both the export mode and the import mode also support an optional standardization of lrc timestamps. Some programs save synced lyrics like this:  
+Both the export mode and the import mode also support an optional standardization of lrc timestamps. Some programs save synced lyrics like this:<br>
 `[00:00.00] text`  
-Others like this:  
+Others like this:<br>
 `[0:00.000]text`  
-I decided to detect both versions (and mixes between them) and unify them into this:  
+I decided to detect both versions (and mixes between them) and unify them into this:<br>
 `[00:00.000]text`  
 Since that can be converted to and from SYLT without losing precision and makes the most sense to me. However the target format can be changed in the script.
 
 All modes support logging and can show progress bars for most of the steps.
+
+## Modes
 
 **What can the test mode do?**
   * recursively scan for .lrc and .txt files in a given directory
@@ -111,24 +113,24 @@ options:
 
 ### More elaborate explanations of the modes and arguments:
 
-**When called with -m test**  
-**Test Mode:**  
-This mode scans a directory and all subdirectories for .lrc and .txt files.  
-The .txt files are filtered to match a common music file naming scheme: 2 or 3 digits followed by a space at the start of the filename. "01 Hello.flac" for example. This prevents matching info.txt and many other .txt files that are not unsynced lyrics. If your naming differs you have to adjust the regular expression as described in the "How to tweak behavior" section.
-Then this mode tries to find matching audio files, testing all extensions passed with -e, --extensions (default flac, mp3).
+**When called with -m test**<br>
+**Test Mode:**<br>
+This mode scans a directory and all subdirectories for .lrc and .txt files.<br>
+The .txt files are filtered to match a common music file naming scheme: 2 or 3 digits followed by a space at the start of the filename. "01 Hello.flac" for example. This prevents matching info.txt and many other .txt files that are not unsynced lyrics. If your naming differs you have to adjust the regular expression as described in the "How to tweak behavior" section.<br>
+Then this mode tries to find matching audio files, testing all extensions passed with -e, --extensions (default flac, mp3).<br>
 Per default only unlinked songs (where no match was found) are logged to console.
 
-**When called with -m mp3tag**  
-**mp3tag Mode (requires mp3tag, Windows/Mac only):**  
-This does everything that Test Mode does and then opens only the songs with linked external lyrics in mp3tag. Before that it checks if mp3tag is on PATH and instructs the user on how to add it to PATH if it is not.  
+**When called with -m mp3tag**<br>
+**mp3tag Mode (requires mp3tag, Windows/Mac only):**<br>
+This does everything that Test Mode does and then opens only the songs with linked external lyrics in mp3tag. Before that it checks if mp3tag is on PATH and instructs the user on how to add it to PATH if it is not.<br>
 Then it asks to create 4 actions for mp3tag. They can back up existing embedded lyrics, embed .lrc files and .txt files to audio tags and lastly delete previously created backups.  
-Both the names of the actions that will be created and the tags the actions should backup and embed to, are configurable in the CONFIG section at the top of the script. The default tag for synced lyrics is the vorbis tag LYRICS, for unsynced lyrics the default tag is UNSYNCEDLYRICS which mp3tag internally maps to the USLT frame for mp3 files.  
-When using this mode you have to be aware of the **internal mappings** of mp3tag to ensure that the tags end up what you want them to be.  
-The SYLT frame for example is **not supported** in mp3tag, therefore synced lyrics will also be embedded to the LYRICS vorbis tag for mp3 files.  
+Both the names of the actions that will be created and the tags the actions should backup and embed to, are configurable in the CONFIG section at the top of the script. The default tag for synced lyrics is the vorbis tag LYRICS, for unsynced lyrics the default tag is UNSYNCEDLYRICS which mp3tag internally maps to the USLT frame for mp3 files.<br>
+When using this mode you have to be aware of the **internal mappings** of mp3tag to ensure that the tags end up what you want them to be.<br>
+The SYLT frame for example is **not supported** in mp3tag, therefore synced lyrics will also be embedded to the LYRICS vorbis tag for mp3 files.<br>
 The actions in mp3tag will always overwrite existing embedded tags. They also cannot delete the external lyrics files after embedding them.
 
-**When called with -m import**  
-**Import Mode (requires mutagen):**  
+**When called with -m import**<br>
+**Import Mode (requires mutagen):**<br>
 This does everything that Test Mode does and then uses mutagen to embed external .lrc and .txt files to audio tags.  
 Currently this mode is ridid and only supports embedding the vorbis tags LYRICS and UNSYNCEDLYRICS to flac files and the id3 frames SYLT and USLT to mp3 files.  
 When -o, --overwrite is specified, existing embedded lyrics are purged and then written anew.  
@@ -137,118 +139,115 @@ When --delete is specified, the script will delete only those .lrc and .txt file
 **BEWARE**: SYLT frames are very strict concerning the formatting.  
 Lines in .lrc files that do not match `[00:00.00] TEXT`, `[0:00.000]TEXT` or a mix of both cannot be stored in the SYLT frame and **will be lost**.
 
-**When called with -m export**  
-**Export Mode (requires mutagen):**  
-This mode scans a directory and all subdirectories for audio files specified with -e, --extensions (default flac, mp3).  
-It then uses mutagen to check if the audio files have embedded lyrics. Flac files are scanned for the vorbis tags LYRICS and UNSYNCEDLYRICS and mp3 files are scanned for the vorbis tag LYRICS as well as the id3 frames SYLT and USLT.  
-Next, the script uses mutagen to export the synced and unsynced lyrics to .lrc and .txt files.  
-When -o, --overwrite is not specified, existing external lyrics are skipped, otherwise they will be overwritten.  
-When --delete is specified, the embedded lyrics tags of files where the export was successful (saved/skipped) will be purged.
+**When called with -m export**<br>
+**Export Mode (requires mutagen):**<br>
+This mode scans a directory and all subdirectories for audio files specified with -e, --extensions (default flac, mp3).<br>
+It then uses mutagen to check if the audio files have embedded lyrics. Flac files are scanned for the vorbis tags LYRICS and UNSYNCEDLYRICS and mp3 files are scanned for the vorbis tag LYRICS as well as the id3 frames SYLT and USLT.<br>
+Next, the script uses mutagen to export the synced and unsynced lyrics to .lrc and .txt files.<br>
+When -o, --overwrite is not specified, existing external lyrics are skipped, otherwise they will be overwritten.<br>
+When --delete is specified, the embedded lyrics tags of files where the export was successful (saved/skipped) will be purged.<br>
 --standardize will change the timestamp formatting of the resulting lrc files to `[00:00.000]TEXT` (target formatting can be changed as described in the "How to tweak behavior" section.
 
-**-d, --directory PATH (optional, default=".")**  
-When run without -d, the script will be called in the folder it was executed from.
+**-d, --directory PATH (optional, default=".")**<br>
+When run without -d, the script will be called in the folder it was executed from.<br>
 If -d is supplied, it must be followed by a valid path to a directory, which will be scanned for .lrc/.txt or audio files, depending on the mode.
 
-**--delete (optional, destructive)**  
-When used in import mode, successfully embedded external lyrics will be deleted.  
+**--delete (optional, destructive)**<br>
+When used in import mode, successfully embedded external lyrics will be deleted.<br>
 When used in export mode, successfully exported embedded lyric tags will be purged.
 
-**-o, --overwrite (optional, destructive)**  
-When used in import mode, purges and then recreates embedded lyrics.
+**-o, --overwrite (optional, destructive)**<br>
+When used in import mode, purges and then recreates embedded lyrics.<br>
 When used in export mode, overwrites existing .lrc and .txt files.
 
-**--standardize (optional)**
-When used in import mode, the timestamps for synced lyrics that will be imported to the vorbis tag LYRICS will be reformatted to `[00:00.000]TEXT`. Lines that do not match `[00:00.00] TEXT`, `[0:00.000]TEXT` or a mix of both will be carried over as they are. However, synced lyrics that will be saved in the SYLT frame are unaffected by this.
+**--standardize (optional)**<br>
+When used in import mode, the timestamps for synced lyrics that will be imported to the vorbis tag LYRICS will be reformatted to `[00:00.000]TEXT`. Lines that do not match `[00:00.00] TEXT`, `[0:00.000]TEXT` or a mix of both will be carried over as they are. However, synced lyrics that will be saved in the SYLT frame are unaffected by this.<br>
 When used in export mode, the timestamps formatting for .lrc files will be reformatted to `[00:00.000]TEXT`. Lines that do not match `[00:00.00] TEXT`, `[0:00.000]TEXT` or a mix of both will be carried over as they are.
 
-**-s, --single_folder (optional)**
+**-s, --single_folder (optional)**<br>
 Changes the behaviour of the script to be non-recursive. Only the directory specified with -d will be scanned.
 
-**-l, --log**  
+**-l, --log**<br>
 Depending on the mode, either linked/unlinked paths to audio files will be logged (test mode/mp3tag mode) or the results of an import/export will be logged (import mode/export mode).
 
-**-p, --progress (optional)**  
+**-p, --progress (optional)**<br>
 Show progress bars during scanning, matching, embedding and exporting. Useful for huge directories.
 
-**-g, --guess_count INT (optional, cosmetic, default=999_999)**  
+**-g, --guess_count INT (optional, cosmetic, default=999_999)**<br>
 Only used when -p is also provided. Guess the number of files in the music directory to allow for a progress bar while scanning the directory. When in doubt, guess a bit high or leave on default.
 
 ## Common examples
 
 ### Case 1: test mode, searching for external lyrics with broken links:
-* minimal version, recursively scan and only log unlinked .lrc/.txt files to console
+* minimal version, recursively scan and only log unlinked .lrc/.txt files to console<br>
 `lyrict.py -m test`
 
-* log to combined logs
+* log to combined logs<br>
 `lyrict.py -m test -l`
   
-* log to combined logs and show progress bars
+* log to combined logs and show progress bars<br>
 `lyrict.py -m test -lp`
 
-* log to combined logs, show progress bars, specify a directory to scan and extensions to match
+* log to combined logs, show progress bars, specify a directory to scan and extensions to match<br>
 `lyrict.py -m test -lp -d "D:\Test" -e flac mp3 ogg m4a`
 
 ### Case 2: mp3tag mode, opening linked songs in mp3tag to embed lyrics:
-* log unlinked lyrics to console, open linked songs in mp3tag
+* log unlinked lyrics to console, open linked songs in mp3tag<br>
 `lyrict.py -m mp3tag`
 
-* log to combined logs and open linked songs in mp3tag
+* log to combined logs and open linked songs in mp3tag<br>
 `lyrict.py -m mp3tag -l`
   
-* overwrite/recreate mp3tag actions and show progress bars
+* overwrite/recreate mp3tag actions and show progress bars<br>
 `lyrict.py -m mp3tag -op`
 
-* show progress bars, specify a directory to scan and extensions to match
+* show progress bars, specify a directory to scan and extensions to match<br>
 `lyrict.py -m mp3tag -p -d "D:\Test" -e flac mp3 ogg m4a`
 
 ### Case 3: import mode, embed external lyrics in flac and mp3 files:
-* embed synced and unsynced external lyrics recursively, skip if embedded lyrics already exist
+* embed synced and unsynced external lyrics recursively, skip if embedded lyrics already exist<br>
 `lyrict.py -m import`
 
-* log results to disk
+* log results to disk<br>
 `lyrict.py -m import -l`
   
-* overwrite embedded lyrics and show progress bars
+* overwrite embedded lyrics and show progress bars<br>
 `lyrict.py -m import -op`
 
-* overwrite embedded lyrics, show progress bars and delete external lyrics that were embedded, specify a directory
+* overwrite embedded lyrics, show progress bars and delete external lyrics that were embedded, specify a directory<br>
 `lyrict.py -m import -op --delete -d "D:\Test"`
 
 ### Case 4: export mode, extract embedded lyrics and write them to .lrc and .txt files:
-* export embedded synced and unsynced lyrics to .lrc and .txt files, skip existing
+* export embedded synced and unsynced lyrics to .lrc and .txt files, skip existing<br>
 `lyrict.py -m export`
 
-* log results to disk
+* log results to disk<br>
 `lyrict.py -m export -l`
 
-* overwrite external lyrics and show progress bars
+* overwrite external lyrics and show progress bars<br>
 `lyrict.py -m export -op`
 
-* overwrite external lyrics, show progress bars and purge embedded lyrics that were exported, specify a directory
+* overwrite external lyrics, show progress bars and purge embedded lyrics that were exported, specify a directory<br>
 `lyrict.py -m import -op --delete -d "D:\Test"`
 
 ## How to tweak behavior
 
-If you want to change the mp3tag action names or the tags used for synced and unsynced lyrics in mp3tag, modify the config section at the top of the script, starting with this line:  
-`################################# MP3TAG CONFIG ######################################`  
+* If you want to change the mp3tag action names or the tags used for synced and unsynced lyrics in mp3tag, modify the config section at the top of the script.
 
-During scanning, if your music files are named in a different pattern than "01 Hello.flac", you can edit the regular expression in this line to change the .txt matching:  
-`    pattern = r'^\d{2,3}\s' # Pattern to filter .txt files, default filters for names starting with 2 or 3 digits and a space, like "01 Hello.flac"`  
-`r'^\d{2,3}_'` instead of `r'^\d{2,3}\s'` for example would match "01_Hello.flac" instead of "01 Hello.flac".
+* During scanning, if your music files are named in a different pattern than "01 Hello.flac", you can edit the regular expression in this line to change the .txt matching:<br>
+`pattern = r'^\d{2,3}\s'` replacing the regex with `r'^\d{2,3}_'` for example would match "01_Hello.flac" instead of "01 Hello.flac".
 
-During import, if you want to save the mp3 tags as id3 2.4 instead of id3 2.3 (chosen for compatibility), you can edit this line:  
-`        audio.save(v2_version=3) # save as id3 2.3 for compatibility`  
-and change `v2_version=3` to `v2_version=4`.  
+* During import, if you want to save the mp3 tags as id3 2.4 instead of id3 2.3 (chosen for compatibility), you can edit this line:<br>
+`audio.save(v2_version=3)` and change `v2_version=3` to `v2_version=4`.
 
-During export and import, if you want to change the formatting of `--standardize` to achieve `[00:00.00] Text`, find and change these lines as described in the comments:  
-`    match_to_skip = r"^\[(\d{2}:\d{2}\.\d{3})\](?! )(.*)$" # if you want the final version to be [00:00.00] text, change "\d{3})\](?! )" to "\d{2})\] "`  
-`            formatted_time = time_obj.strftime("%M:%S.%f")[:-3] # if you want to change the formatting to [00:00.00] text, change "[:-3]" to "[:-4]`
-`            standardized_lyrics.append(f"[{formatted_time}]{text}") # and also change "[{formatted_time}]{text}" to "[{formatted_time}] {text}"`
+* During export and import, if you want to change the formatting of `--standardize` to achieve `[00:00.00] Text`, find:<br>
+`match_to_skip = r"^\[(\d{2}:\d{2}\.\d{3})\](?! )(.*)$"` and change change "\d{3})\](?! )" to "\d{2})\] "<br>
+Then find `formatted_time = time_obj.strftime("%M:%S.%f")[:-3]` and change "[:-3]" to "[:-4]<br>
+And lastly, find `standardized_lyrics.append(f"[{formatted_time}]{text}")`and change "[{formatted_time}]{text}" to "[{formatted_time}] {text}"
 
-During export, if you also want this format `[00:00.00] text` when exporting SYLT frames to .lrc files, find and change these lines as described in the comments:
-`        lrc_timestamp = f"[{minutes:02}:{seconds:06.3f}]" # change "06.3f" to "06.2f" if you want "[00:00.00] text"`
-`        lrc_line = f"{lrc_timestamp}{text}" # change "{lrc_timestamp}{text}" to "{lrc_timestamp} {text}" if you want "[00:00.00] text"`
+*During export, if you also want this format `[00:00.00] text` when exporting SYLT frames to .lrc files, find:<br>
+`lrc_timestamp = f"[{minutes:02}:{seconds:06.3f}]"` and change "06.3f" to "06.2f"<br>
+Also find `lrc_line = f"{lrc_timestamp}{text}"` and change "{lrc_timestamp}{text}" to "{lrc_timestamp} {text}".
 
 ## Known Issues
  * During export, when an mp3 file has both the vorbis tag LYRICS and a SYLT frame, only one of them is written to an .lrc file. The other one is skipped. If -o, --overwrite is used, instead of being skipped, the first value will be overwritten with the second value. If LYRICS and SYLT have identical content, this should not matter.
