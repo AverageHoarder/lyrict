@@ -228,7 +228,7 @@ Only used when -p is also provided. Guess the number of files in the music direc
 `lyrict.py -m export -op`
 
 * overwrite external lyrics, show progress bars and purge embedded lyrics that were exported, specify a directory<br>
-`lyrict.py -m import -op --delete -d "D:\Test"`
+`lyrict.py -m export -op --delete -d "D:\Test"`
 
 ## How to tweak behavior
 
