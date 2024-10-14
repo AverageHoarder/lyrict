@@ -56,8 +56,6 @@ Export: Song extensions that will be scanned for embedded lyrics, default flac a
     parser.add_argument('--export', action='store_true',
                         help=f'''Export embedded lyrics of flac and mp3 files. Synced lyrics (LYRICS, SYLT) to .lrc and unsynced lyrics (UNSYNCEDLYRICS/USLT) to .txt files. 
 Requires mutagen, use "pip3 install mutagen" to install it''')
-    parser.add_argument('-g', '--guess_count', type=int, default=999_999, const=999_999, nargs="?",
-                        help='Guess the total file count of the directory to be displayed when used with -p, default: 999_999.')
     parser.add_argument('-l', '--log', action='count',
                         help='''Test, mp3tag: Log filepaths (lyric and music extension) to "lyrict_results.log". 
 "-ll" logs each filetype separately (lrc_flac.log, txt_mp3.log...) instead.
@@ -109,13 +107,13 @@ Export: Overwrite the content of existing .lrc/.txt files.''')
 
 ########################################## SHARED ############################################
 # Find all .lrc and .txt files in the directory specified with -d, recursively if not called with -s, --single
-def find_lrc_files(directory, guess_count, single_folder, progress):
+def find_lrc_files(directory, single_folder, progress):
     lrc_files = []
     txt_files = []
     pattern = r'^\d{2,3}\s' # Pattern to filter .txt files, default filters for names starting with 2 or 3 digits and a space, like "01 Hello.flac"
 
     if not single_folder:
-        with tqdm(total = guess_count, desc="searching", unit=" files", disable=not progress) as pbar:
+        with tqdm(desc="searching", unit=" files", disable=not progress) as pbar:
             lrc_count = 0
             txt_count = 0
             for root, dirs, files in os.walk(directory):
@@ -130,7 +128,7 @@ def find_lrc_files(directory, guess_count, single_folder, progress):
                         txt_count += 1
                         pbar.set_postfix({"lrc, txt": f"{lrc_count}, {txt_count}"})
     else:
-        with tqdm(total = guess_count, desc="searching", unit=" files", disable=not progress) as pbar:
+        with tqdm(desc="searching", unit=" files", disable=not progress) as pbar:
             lrc_count = 0
             txt_count = 0
             for file in os.listdir(directory):
@@ -512,12 +510,12 @@ def write_import_log(results, separate_logs, log_path):
 
 #################################### EXPORT MUTAGEN ########################################
 # Find all music files specified in -e, --extensions, default FLAC, MP3
-def find_music_files(directory, extensions, guess_count, single_folder, progress):
+def find_music_files(directory, extensions, single_folder, progress):
     exts = tuple(["." + extension for extension in extensions])
     music_files = []
 
     if not single_folder:
-        with tqdm(total = guess_count, desc="searching music", unit=" files", disable=not progress) as pbar:
+        with tqdm(desc="searching music", unit=" files", disable=not progress) as pbar:
             songs = 0
             for root, dirs, files in os.walk(directory):
                 for file in files:
@@ -527,7 +525,7 @@ def find_music_files(directory, extensions, guess_count, single_folder, progress
                         songs += 1
                         pbar.set_postfix({"songs": songs})
     else:
-        with tqdm(total = guess_count, desc="searching", unit=" files", disable=not progress) as pbar:
+        with tqdm(desc="searching", unit=" files", disable=not progress) as pbar:
             songs = 0
             for file in os.listdir(directory):
                 pbar.update(1)
@@ -743,7 +741,6 @@ def main(args):
     directory = args.directory
     delete = args.delete
     extensions = args.extensions
-    guess_count = args.guess_count
     log_to_disk = args.log_to_disk
     separate_logs = args.separate_logs
     log_path = args.log_path
@@ -757,7 +754,7 @@ def main(args):
     standardize = args.standardize
 
     if test_run:
-        lrc_paths, txt_paths = find_lrc_files(directory, guess_count, single_folder, progress)
+        lrc_paths, txt_paths = find_lrc_files(directory, single_folder, progress)
         if lrc_paths and txt_paths:
             match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
             match_categories_txt = find_matches(txt_paths, "txt", extensions, progress)
@@ -816,7 +813,7 @@ def main(args):
 
     if mp3tag:
         action_folder = os.path.join(os.getenv('APPDATA')+"\\Mp3tag\\data\\actions\\")
-        lrc_paths, txt_paths = find_lrc_files(directory, guess_count, single_folder, progress)
+        lrc_paths, txt_paths = find_lrc_files(directory, single_folder, progress)
         if lrc_paths and txt_paths:
             match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
             match_categories_txt = find_matches(txt_paths, "txt", extensions, progress)
@@ -836,7 +833,7 @@ def main(args):
             mp3tag_flow_single(match_categories, action_folder, overwrite, extensions, "txt")
 
     if import_mode:
-        lrc_paths, txt_paths = find_lrc_files(directory, guess_count, single_folder, progress)
+        lrc_paths, txt_paths = find_lrc_files(directory, single_folder, progress)
         if lrc_paths and txt_paths:
             match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
             match_categories_txt = find_matches(txt_paths, "txt", extensions, progress)
@@ -883,7 +880,7 @@ def main(args):
             print(f"{saved} embedded, {skipped} skipped, {failed} failed, {deleted} external lyrics deleted.")
 
     if export_mode:
-        music_files = find_music_files(directory, extensions, guess_count, single_folder, progress)
+        music_files = find_music_files(directory, extensions, single_folder, progress)
         synced_lyrics, unsynced_lyrics = extract_lyrics(music_files, progress, standardize)
         write_success = {"saved":[], "skipped":[], "failed":[]}
         lrc_saved = 0
