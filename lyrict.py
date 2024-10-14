@@ -122,11 +122,11 @@ def find_lrc_files(directory, single_folder, progress):
                     if file.endswith(".lrc"):
                         lrc_files.append(os.path.join(os.path.abspath(root), file))
                         lrc_count += 1
-                        pbar.set_postfix({"lrc, txt": f"{lrc_count}, {txt_count}"})
+                        pbar.set_postfix({"lrc": lrc_count, "txt": txt_count})
                     elif file.endswith(".txt") and re.match(pattern, file):
                         txt_files.append(os.path.join(os.path.abspath(root), file))
                         txt_count += 1
-                        pbar.set_postfix({"lrc, txt": f"{lrc_count}, {txt_count}"})
+                        pbar.set_postfix({"lrc": lrc_count, "txt": txt_count})
     else:
         with tqdm(desc="searching", unit=" files", disable=not progress) as pbar:
             lrc_count = 0
@@ -135,11 +135,11 @@ def find_lrc_files(directory, single_folder, progress):
                 if file.endswith(".lrc"):
                     lrc_files.append(os.path.join(os.path.abspath(directory), file))
                     lrc_count += 1
-                    pbar.set_postfix({"lrc, txt": f"{lrc_count}, {txt_count}"})                    
+                    pbar.set_postfix({"lrc": lrc_count, "txt": txt_count})              
                 elif file.endswith(".txt")and re.match(pattern, file):
                     txt_files.append(os.path.join(os.path.abspath(directory), file))
                     txt_count += 1
-                    pbar.set_postfix({"lrc, txt": f"{lrc_count}, {txt_count}"})
+                    pbar.set_postfix({"lrc": lrc_count, "txt": txt_count})
 
     if len(lrc_files) == 0:
         lrc_files = None
@@ -472,7 +472,7 @@ def import_lyrics(match_categories_lrc={}, match_categories_txt={}, delete_files
                                 files_to_delete.append(txt_path)
                     except Exception as e:
                         results["failed"].append({"path": path, "error": str(e)})
-                    pbar.set_postfix({"saved:skipped:failed": f"{len(results["saved"])}:{len(results["skipped"])}:{len(results["failed"])}"})
+                    pbar.set_postfix({"saved": len(results["saved"]), "skipped": len(results["skipped"]), "failed": len(results["failed"])})
                     pbar.update(1)
                 combined_results["saved"].extend(results["saved"])
                 combined_results["skipped"].extend(results["skipped"])
@@ -561,7 +561,7 @@ def extract_lyrics(file_paths, progress, standardize):
             if unsynced:
                 unsynced_count += 1
             
-            pbar.set_postfix({"synced:unsynced": f"{synced_count}:{unsynced_count}"})
+            pbar.set_postfix({"synced": synced_count, "unsynced": unsynced_count})
             pbar.update(1)
     return synced_lyrics, unsynced_lyrics
 
@@ -655,7 +655,7 @@ def write_lrc_files(lyrics, extension, overwrite, progress, write_success):
                         f.write(lyrics)
                     write_success["saved"].append((filename, extension))
                     saved += 1
-                    pbar.set_postfix({"saved:skipped": f"{saved}:{skipped}"})                        
+                    pbar.set_postfix({"saved": saved, "skipped": skipped})
                 except PermissionError:
                     write_success["failed"].append((filename, extension))
                     failed += 1
@@ -663,7 +663,7 @@ def write_lrc_files(lyrics, extension, overwrite, progress, write_success):
             else:
                 write_success["skipped"].append((filename, extension))
                 skipped += 1
-                pbar.set_postfix({"saved:skipped": f"{saved}:{skipped}"})
+                pbar.set_postfix({"saved": saved, "skipped": skipped})
     return saved, skipped, failed
 
 # Remove embedded lyrics tags from files
@@ -705,13 +705,13 @@ def purge_tags(write_success, progress):
                         # Save the file
                         audio.save()
                     purged += 1
-                    pbar.set_postfix({"purged:failed": f"{purged}:{failed}"})
+                    pbar.set_postfix({"purged": purged, "failed": failed})
                     pbar.update(1)                    
                     
                 except Exception as e:
                     print(f"Error processing {file_path}: {e}")
                     failed += 1
-                    pbar.set_postfix({"purged:failed": f"{purged}:{failed}"})
+                    pbar.set_postfix({"purged": purged, "failed": failed})
                     pbar.update(1)                         
                     continue
         return purged, failed
