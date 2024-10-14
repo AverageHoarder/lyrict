@@ -77,8 +77,8 @@ If you want to be able to call it from anywhere on your system (which is more co
 ### Output from -h:
 
 ```
-usage: lyrict.py [-h] [-d [DIRECTORY]] [--delete] [-e EXTENSIONS [EXTENSIONS ...]] [--export] [-g [GUESS_COUNT]] [-l] [--log_path [LOG_PATH]] -m
-                 {export,import,mp3tag,test} [-o] [-p] [-s] [--standardize]
+usage: lyrict.py [-h] [-d [DIRECTORY]] [--delete] [-e EXTENSIONS [EXTENSIONS ...]] [--export] [-l] [--log_path [LOG_PATH]] -m {export,import,mp3tag,test} [-o]
+                 [-p] [-s] [--standardize]
 
 Test .lrc and .txt lyrics for broken links, embed synced and unsynced lyrics into tags or extract them from tags to files.
 
@@ -93,17 +93,15 @@ options:
                         scanned for embedded lyrics, default flac and mp3
   --export              Export embedded lyrics of flac and mp3 files. Synced lyrics (LYRICS, SYLT) to .lrc and unsynced lyrics (UNSYNCEDLYRICS/USLT) to .txt
                         files. Requires mutagen, use "pip3 install mutagen" to install it
-  -g [GUESS_COUNT], --guess_count [GUESS_COUNT]
-                        Guess the total file count of the directory to be displayed when used with -p, default: 999_999.
   -l, --log             Test, mp3tag: Log filepaths (lyric and music extension) to "lyrict_results.log". "-ll" logs each filetype separately (lrc_flac.log,
                         txt_mp3.log...) instead. Import, Export: log embedding/exporting results to "lyrict_import_results"/"lyrict_export_results"
   --log_path [LOG_PATH]
                         The directory to save logs to when used with -l or -ll, defaults to "."
   -m {export,import,mp3tag,test}
                         Mode, use 'test' to only log linked/unlinked songs to console or to file(s) when used with -l or -ll. Use 'mp3tag' to embed external
-                        lyrics (.txt/.lrc) in audio tags via Mp3tag. Use 'import' to embed external lyrics (.txt/.lrc) in audio tags via mutagen. Use 'export'
+                        lyrics (.txt/.lrc) in audio tags via mp3tag. Use 'import' to embed external lyrics (.txt/.lrc) in audio tags via mutagen. Use 'export'
                         to export embedded tags to external files (.lrc/.txt) via mutagen.
-  -o, --overwrite       mp3tag: Overwrite/recreate the Mp3tag actions to reflect changes made in the config section. Import: Purge and overwrite existing
+  -o, --overwrite       mp3tag: Overwrite/recreate the mp3tag actions to reflect changes made in the config section. Import: Purge and overwrite existing
                         embedded lyrics tags (LYRICS/UNSYNCEDLYRICS/SYLT/USLT) Export: Overwrite the content of existing .lrc/.txt files.
   -p, --progress        Show progress bars. Useful for huge directories. Requires tqdm, use "pip3 install tqdm" to install it.
   -s, --single_folder   Test, Import, mp3tag: Only scans a single folder for .lrc and .txt files, no subdirectories. Export: Only scans a single folder for
@@ -173,8 +171,6 @@ Depending on the mode, either linked/unlinked paths to audio files will be logge
 **-p, --progress (optional)**<br>
 Show progress bars during scanning, matching, embedding and exporting. Useful for huge directories.
 
-**-g, --guess_count INT (optional, cosmetic, default=999_999)**<br>
-Only used when -p is also provided. Guess the number of files in the music directory to allow for a progress bar while scanning the directory. When in doubt, guess a bit high or leave on default.
 
 ## Common examples
 
