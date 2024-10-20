@@ -78,7 +78,7 @@ Export: Overwrite the content of existing .lrc/.txt files.''')
     parser.add_argument('-s', '--single_folder', action='store_true',
                         help='Test, Import, mp3tag: Only scans a single folder for .lrc and .txt files, no subdirectories. Export: Only scans a single folder for music files.')
     parser.add_argument('--standardize', action='store_true',
-                        help=f'Import/Export: Ensure "[00:00.000]TEXT" formatting for lines in synced lyrics instead of "[0:00.000]TEXT" or "[00:00.00] TEXT".')
+                        help=f'Import/Export: standardize and fix timestamps of synced lyrics to `[mm:ss.xxx]text`, `[hh:mm:ss.xxx]text`, `[mm:ss]text` or `[hh:mm:ss]text` formats (depending on their source format)')
 
     args: argparse.Namespace = parser.parse_args()
 
