@@ -8,7 +8,7 @@ import argparse
 import itertools
 from time import sleep
 from tqdm import tqdm
-from datetime import datetime
+from datetime import timedelta
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3, SYLT, USLT, Encoding
@@ -48,7 +48,7 @@ def parse_arguments():
                         type=dir_path, default=".", const=".", nargs="?")
     parser.add_argument('--delete', action='store_true',
                         help=f'''Import: After successful import, deletes external .lrc and .txt files from disk.
-Export: After successful export, deletes LYRICS, SYLT and USYLT tags from mp3 files and LYRICS and UNSYNCEDLYRICS tags from flac files.''')     
+Export: After successful export, deletes LYRICS, SYLT and USLT tags from mp3 files and LYRICS and UNSYNCEDLYRICS tags from flac files.''')     
     parser.add_argument('-e', '--extensions',
                         help='''Test, Import, mp3tag: List of song extensions the script will look for, default: flac and mp3. 
 Export: Song extensions that will be scanned for embedded lyrics, default flac and mp3''',
@@ -370,15 +370,57 @@ def read_lyrics(file_path):
 
 def parse_lrc_to_sylt(lyrics):
     sylt_lyrics = []
-    timestamp_pattern = re.compile(r'^\[(\d{1,2}):(\d{2})\.(\d{2,3})\] *(.*)$')
+    language_pattern = re.compile(r'^\[la: *(\w{2,3})\]$')
+    offset_pattern = re.compile(r'^\[offset: *([+-]\d+)\]$')
+    timestamp_pattern = re.compile(r'^\[(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})(?:\.(\d{2,3}))?\] *(?!(?:.*<\d{1,3}:|\[\d{1,3}:))(.*)$')
+    mutli_timestamp_check_pattern = re.compile(r'^(?:\[(?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?\]){2,}.*$')
+    multi_timestamp_pattern = re.compile(r'(\[(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})(?:\.(\d{2,3}))?\])')
+    multi_text_pattern = re.compile(r'^(?:\[(?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?\])+ *(.*)$')
     lines = lyrics.split('\n')
-    for line in lines:
-        match = timestamp_pattern.match(line)
-        if match:
-            minutes, seconds, milliseconds, text = match.groups()
-            timestamp = (int(minutes) * 60000) + (int(seconds) * 1000) + int(milliseconds.ljust(3, '0'))  # Convert to milliseconds
-            sylt_lyrics.append((text, timestamp))
-    return sorted(sylt_lyrics, key=lambda x: x[1])
+    omitted_lines = []
+    language = ""
+    offset = 0
+    # Determine language and offset
+    for line in itertools.islice(lines, 20):
+        match_lang = re.match(language_pattern, line)
+        match_offset = re.match(offset_pattern, line)
+        if match_lang:
+            language = match_lang.group(1)
+        if match_offset:
+            offset = int(match_offset.group(1))
+    # Default to English if no language tag was detected in the .lrc file
+    if not language:
+        language = "eng"
+
+    for index, line in enumerate(lines):
+        if timestamp_pattern.match(line): # Append lines that follow a [timestamp]lyrics pattern.
+            match = timestamp_pattern.match(line)
+            hours, minutes, seconds, milliseconds, text = match.groups()
+            hours = int(hours) if hours else 0
+            minutes = int(minutes)
+            seconds = int(seconds)
+            milliseconds = int(milliseconds.ljust(3, '0')) if milliseconds else 0 # Convert to milliseconds 
+            timestamp = (hours * 3600000 + minutes * 60000 + seconds * 1000 + milliseconds + offset)
+            if timestamp >= 0:
+                sylt_lyrics.append((text.strip(), timestamp))
+        elif mutli_timestamp_check_pattern.match(line): # Detect repeated lines [mm:ss.xxx][mm:ss.xxx]...
+            timestamps = re.findall(multi_timestamp_pattern, line)
+            text = re.match(multi_text_pattern, line)
+            text = text.group(1).strip() if text else ""
+            for timestamp in timestamps:
+                hours = match[1]
+                minutes = int(match[2])
+                seconds = int(match[3])
+                milliseconds = match[4]
+                hours = int(hours) if hours else 0
+                milliseconds = int(milliseconds.ljust(3, '0')) if milliseconds else 0 # Convert to milliseconds
+                sylt_timestamp = (hours * 3600000 + minutes * 60000 + seconds * 1000 + milliseconds + offset)
+                if sylt_timestamp > 0:
+                    sylt_lyrics.append((text, sylt_timestamp))
+        else:
+            omitted_lines.append(f"{index + 1} {line}")
+
+    return language, sorted(sylt_lyrics, key=lambda x: x[1]), omitted_lines
 
 def embed_lyrics_flac(flac_file, lyrics=None, unsynced_lyrics=None, standardize=False, overwrite=False, results=None):
     audio = FLAC(flac_file)
@@ -412,21 +454,29 @@ def embed_lyrics_mp3(mp3_file, lyrics=None, unsynced_lyrics=None, overwrite=Fals
         if lyrics:
             if overwrite:
                 audio.tags.delall('SYLT') # delete existing SYLT frames to avoid duplicates
-            sylt_lyrics = parse_lrc_to_sylt(lyrics)
-            audio.tags.setall("SYLT", [SYLT(encoding=Encoding.UTF8, lang='eng', format=2, type=1, text=sylt_lyrics)])
-#            print(audio.tags.get('SYLT::eng')) # Uncomment for debugging nasty SYLT syntax
+            language, sylt_lyrics, omitted_lines = parse_lrc_to_sylt(lyrics)
+            audio.tags.setall("SYLT", [SYLT(encoding=Encoding.UTF8, lang=language, format=2, type=1, text=sylt_lyrics)])
+            #print(audio.tags.get('SYLT::eng')) # Uncomment for debugging nasty SYLT syntax
             changed = True
 
     # USLT frame
     if not any(isinstance(frame, USLT) for frame in audio.tags.values()) or overwrite: # Embed if lyrics are not already embedded or when overwrite is True    
         if unsynced_lyrics:
+            language_pattern = re.compile(r'^\[la: *(\w{2,3})\]$')
             if overwrite:
                 audio.tags.delall('USLT') # delete existing USLT frames to avoid duplicates
-            uslt_frame = USLT(encoding=Encoding.UTF8, lang='eng', desc='', text=unsynced_lyrics)
+            for line in unsynced_lyrics:
+                if re.match(language_pattern, line):
+                    language == re.match(language_pattern, line).group(1)
+                else:
+                    language == "eng"
+            uslt_frame = USLT(encoding=Encoding.UTF8, lang=language, desc='', text=unsynced_lyrics)
             audio.tags.add(uslt_frame)
             changed = True
     if changed:
         audio.save(v2_version=3) # save as id3 2.3 for compatibility
+        if omitted_lines:
+            results["omitted_lines"].append((mp3_file, omitted_lines))
         results["saved"].append(mp3_file)
     else:
         results["skipped"].append(mp3_file)
@@ -445,11 +495,11 @@ def embed_lyrics(file_path, lrc_path=None, txt_path=None, standardize=False, ove
 def import_lyrics(match_categories_lrc={}, match_categories_txt={}, delete_files=False, standardize=False, progress=False, overwrite=False):
     all_extensions = set(match_categories_lrc.keys()).union(set(match_categories_txt.keys()))
     files_to_delete = []  # List to store files that need to be deleted
-    combined_results = {"saved": [], "skipped": [], "deleted": [], "failed": []}
+    combined_results = {"saved": [], "skipped": [], "deleted": [], "failed": [], "omitted_lines": []}
 
     for ext in all_extensions:
         if ext == "mp3" or ext == "flac":
-            results = {"saved":[], "skipped": [], "failed": []}
+            results = {"saved":[], "skipped": [], "failed": [], "omitted_lines": []}
             lrc_paths = set(match_categories_lrc.get(ext, []))
             txt_paths = set(match_categories_txt.get(ext, []))
             with tqdm(total=len(lrc_paths | txt_paths), desc=f"embedding {ext}", unit=" files", disable=not progress) as pbar:
@@ -477,6 +527,7 @@ def import_lyrics(match_categories_lrc={}, match_categories_txt={}, delete_files
                 combined_results["saved"].extend(results["saved"])
                 combined_results["skipped"].extend(results["skipped"])
                 combined_results["failed"].extend(results["failed"])
+                combined_results["omitted_lines"].extend(results["omitted_lines"])
         else:
             continue     
     # Delete files after processing all music files
@@ -497,7 +548,12 @@ def write_import_log(results, separate_logs, log_path):
                 if len(results[category]) > 0:
                     log.write(f"{category} files:\n")
                     for result_path in results[category]:
-                        log.write(f"{result_path}\n")
+                        if isinstance(result_path, tuple):
+                            log.write(result_path[0]+"\n")
+                            for line in result_path[1]:
+                                log.write(f"\t{line}\n")
+                        else:
+                            log.write(result_path+"\n")
                     log.write("\n")
     else:
         for category in categories:
@@ -569,34 +625,60 @@ def extract_lyrics(file_paths, progress, standardize):
 def extract_sylt_to_lrc(sylt_frame):
     lrc_lines = []
     for text, timestamp in sylt_frame.text:
-        minutes = timestamp // 60000
-        seconds = (timestamp % 60000) / 1000
-        lrc_timestamp = f"[{minutes:02}:{seconds:06.3f}]" # change "06.3f" to "06.2f" if you want "[00:00.00] text"
-        lrc_line = f"{lrc_timestamp}{text}" # change "{lrc_timestamp}{text}" to "{lrc_timestamp} {text}" if you want "[00:00.00] text"
+        # Convert milliseconds to timedelta
+        duration = timedelta(milliseconds=timestamp)
+        
+        # Extract hours, minutes, seconds, and milliseconds
+        hours, remainder = divmod(duration.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        milliseconds = duration.microseconds // 1000  # Get milliseconds
+
+        # Format the output as [hh:mm:ss.xxx] or [mm:ss.xxx]
+        if hours > 0:
+            timestamp_formatted = f'[{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}]'
+        else:
+            timestamp_formatted = f'[{minutes:02}:{seconds:02}.{milliseconds:03}]'
+        lrc_line = f"{timestamp_formatted}{text}" # change "{lrc_timestamp}{text}" to "{lrc_timestamp} {text}" if you want "[00:00.00] text"
         lrc_lines.append(lrc_line)
-    lrc_lines.sort()
     lrc_content = "\n".join(lrc_lines)
     return lrc_content
 
-# Extract lyrics from MP3 files
 def process_mp3(file_path, synced_lyrics, unsynced_lyrics, standardize):
     audio = MP3(file_path, ID3=ID3)
     synced = False
     unsynced = False
+
     for tag in audio.tags.values():
         if isinstance(tag, SYLT):
+            # Extract language and description
+            lang = tag.lang
+            desc = tag.desc
+            
+            # Extract lyrics content in LRC format
             lrc_content = extract_sylt_to_lrc(tag)
-            synced_lyrics.append((file_path, lrc_content))
+            
+            # Append tuple with file_path, LRC content, language, and description
+            synced_lyrics.append((file_path, lrc_content, lang, desc))
             synced = True
+
         elif isinstance(tag, USLT):
-            unsynced_lyrics.append((file_path, tag.text))
+            # Extract language for unsynced lyrics
+            lang = tag.lang
+            desc = None
+            
+            # Append tuple with file_path, lyrics, and language
+            unsynced_lyrics.append((file_path, tag.text, lang, desc))
             unsynced = True
+
         elif isinstance(tag, TXXX) and tag.desc == "LYRICS":
             lyrics = tag.text[0]
             if standardize:
                 lyrics = standardize_timestamps(lyrics)
-            synced_lyrics.append((file_path, lyrics))
+                
+            # For TXXX, there's no language field, so we append None for language
+            synced_lyrics.append((file_path, lyrics, None, None))
             synced = True
+
     return synced, unsynced
 
 # Extract lyrics from FLAC files
@@ -608,35 +690,65 @@ def process_flac(file_path, synced_lyrics, unsynced_lyrics, standardize):
         lyrics = audio["LYRICS"][0]
         if standardize:
             lyrics = standardize_timestamps(lyrics)
-        synced_lyrics.append((file_path, lyrics))
+        synced_lyrics.append((file_path, lyrics, None, None))
         synced = True
     if "UNSYNCEDLYRICS" in audio:
-        unsynced_lyrics.append((file_path, audio["UNSYNCEDLYRICS"][0]))
+        unsynced_lyrics.append((file_path, audio["UNSYNCEDLYRICS"][0], None, None))
         unsynced = True
     return synced, unsynced
 
-# Conform timestamp style to [00:00.000]TEXT
+# standardize timestamps, output formats hh:mm:ss.xxx, hh:mm:ss, mm:ss.xxx, mm:ss
 def standardize_timestamps(lyrics):
-    match_to_skip = r"^\[(\d{2}:\d{2}\.\d{3})\](?! )(.*)$" # if you want the final version to be [00:00.00] text, change "\d{3})\](?! )" to "\d{2})\] "
-    match_to_alter = r"^\[(\d{1,2}:\d{2}\.\d{2,3})\] *(.*)$"
+    def fix_timestamp(match):
+        # Split the timestamp into components
+        units_split = re.match(split_timestamp_pattern, match.group(1))
+        
+        hours = int(units_split.group(1)) if units_split.group(1) else 0
+        minutes = int(units_split.group(2))
+        seconds = int(units_split.group(3))
+        milliseconds = int(units_split.group(4)) if units_split.group(4) else None
+
+        # Use timedelta to handle atypical timestamps
+        total_time = timedelta(hours=hours, minutes=minutes, seconds=seconds, milliseconds=milliseconds or 0)
+        
+        # Convert the timedelta back into hours, minutes, seconds, and milliseconds
+        total_seconds = total_time.total_seconds()
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, remainder = divmod(remainder, 60)
+        seconds = int(remainder)
+        milliseconds = int((remainder - seconds) * 1000)
+
+        # Format the timestamp accordingly
+        if hours:
+            formatted_time = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+            if units_split.group(4) is not None:  # If milliseconds were present in original format
+                formatted_time += f".{milliseconds:03}"
+        else:
+            formatted_time = f"{int(minutes):02}:{int(seconds):02}"
+            if units_split.group(4) is not None:  # If milliseconds were present in original format
+                formatted_time += f".{milliseconds:03}"
+        return formatted_time
+
+    # Regular expressions for matching timestamps
+    timestamp_pattern = re.compile(r"(?<=[\[<])((?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?)(?=[\]>])")
+    split_timestamp_pattern = re.compile(r"(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})(?:\.(\d{2,3}))?")
+
+    # Split lyrics into lines
     lines = lyrics.split('\n')
     standardized_lyrics = []
 
-    for line in itertools.islice(lines, 5):
-        skip = re.match(match_to_skip, line)
-        if skip:
-            return lyrics
+    # Process each line
     for line in lines:
-        match = re.match(match_to_alter, line)
-        if match:
-            time_stamp = match.group(1)
-            text = match.group(2)
-            time_obj = datetime.strptime(time_stamp, "%M:%S.%f")
-            formatted_time = time_obj.strftime("%M:%S.%f")[:-3] # if you want to change the formatting to [00:00.00] text, change "[:-3]" to "[:-4]
-            standardized_lyrics.append(f"[{formatted_time}]{text}") # and also change "[{formatted_time}]{text}" to "[{formatted_time}] {text}"
-        else:
-            standardized_lyrics.append(line)
+        # First, replace the timestamp with standardized format
+        standardized_line = re.sub(timestamp_pattern, fix_timestamp, line)
+        
+        # Then, remove any space immediately after the closing bracket of the timestamp
+        standardized_line = re.sub(r"(\])\s+", r"\1", standardized_line)
+        
+        standardized_lyrics.append(standardized_line)
+    
     return '\n'.join(standardized_lyrics)
+
 
 # Export embedded lyrics to .lrc and .txt files
 def write_lrc_files(lyrics, extension, overwrite, progress, write_success):
@@ -644,10 +756,16 @@ def write_lrc_files(lyrics, extension, overwrite, progress, write_success):
         saved = 0
         skipped = 0
         failed = 0
-        for filename, lyrics in lyrics:
+        for filename, lyrics, lang, desc in lyrics:
             pbar.update(1)
             basename = os.path.splitext(filename)[0]
             lyrics_filename = basename + extension
+            language_pattern = r'\[la: *(\w{2,3})\]'
+            if extension == ".lrc" and lang is not None:
+                if re.search(language_pattern, lyrics):
+                    lyrics = re.sub(language_pattern, f"[la:{lang}]", lyrics)
+                else:
+                    lyrics = f"[la:{lang}]\n" + lyrics
             lyrics = '\n'.join(line.strip() for line in lyrics.split('\r\n'))
             if not os.path.exists(lyrics_filename) or overwrite:
                 try:
@@ -849,7 +967,8 @@ def main(args):
             skipped = len(results["skipped"])
             failed = len(results["failed"])
             deleted = len(results["deleted"])
-            print(f"{saved} embedded, {skipped} skipped, {failed} failed, {deleted} external lyrics deleted.")
+            omitted = len(results["omitted_lines"])
+            print(f"{saved} embedded, {skipped} skipped, {omitted} files with omitted lines, {failed} failed, {deleted} external lyrics deleted.")
         elif lrc_paths and not txt_paths:
             match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
             results = import_lyrics(match_categories_lrc=match_categories_lrc,
@@ -863,7 +982,8 @@ def main(args):
             skipped = len(results["skipped"])
             failed = len(results["failed"])
             deleted = len(results["deleted"])
-            print(f"{saved} embedded, {skipped} skipped, {failed} failed, {deleted} external lyrics deleted.")
+            omitted = len(results["omitted_lines"])
+            print(f"{saved} embedded, {skipped} skipped, {omitted} files with omitted lines, {failed} failed, {deleted} external lyrics deleted.")
         elif not lrc_paths and txt_paths:
             match_categories_txt = find_matches(lrc_paths, "txt", extensions, progress)
             results = import_lyrics(match_categories_txt=match_categories_txt,
