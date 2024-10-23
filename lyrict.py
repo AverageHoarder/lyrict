@@ -373,7 +373,7 @@ def parse_lrc_to_sylt(lyrics):
     language_pattern = re.compile(r'^\[la: *(\w{2,3})\]$')
     offset_pattern = re.compile(r'^\[offset: *([+-]\d+)\]$')
     timestamp_pattern = re.compile(r'^\[(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})(?:\.(\d{2,3}))?\] *(?!(?:.*<\d{1,3}:|\[\d{1,3}:))(.*)$')
-    mutli_timestamp_check_pattern = re.compile(r'^(?:\[(?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?\]){2,}.*$')
+    mutli_timestamp_check_pattern = re.compile(r'^(?:\[(?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?\] *){2,}.*$')
     multi_timestamp_pattern = re.compile(r'(\[(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})(?:\.(\d{2,3}))?\])')
     multi_text_pattern = re.compile(r'^(?:\[(?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?\])+ *(.*)$')
     lines = lyrics.split('\n')
@@ -743,7 +743,7 @@ def standardize_timestamps(lyrics):
         standardized_line = re.sub(timestamp_pattern, fix_timestamp, line)
         
         # Then, remove any space immediately after the closing bracket of the timestamp
-        standardized_line = re.sub(r"(\])\s+", r"\1", standardized_line)
+        standardized_line = re.sub(r"(\d{2}\])\s+", r"\1", standardized_line)
         
         standardized_lyrics.append(standardized_line)
     
