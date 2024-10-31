@@ -20,7 +20,7 @@ I decided to detect all of these versions (and mixes between them) and tidy them
 The script can either respect the source format:<br>
 `[62:00.000]text` becomes `[01:02:00.000]text` to correctly represent the hours while
 `[03:20]` remains `[03:20]` as adding 3 zeros to it would give no extra precision and simply wastes space.
-or it can force all existing timestamps into `[hh:mm:ss.xxx]text` and `[mm:ss.xxx]text` or `[hh:mm:ss.xx]text` and `[mm:ss.xx]text`.
+Alternatively it can force all existing timestamps into `[hh:mm:ss.xxx]text` and `[mm:ss.xxx]text` or `[hh:mm:ss.xx]text` and `[mm:ss.xx]text`.
 When the script has to create timestamps (when exporting from sylt), it will always choose `[mm:ss.xxx]lyrics` for timestamps without hours and `[hh:mm:ss.xxx]lyrics` for those with hours.
 
 
@@ -98,47 +98,53 @@ If you want to be able to call it from anywhere on your system (which is more co
 ### Output from -h:
 
 ```
-usage: lyrict.py [-h] [-d [DIRECTORY]] [--delete] [-e EXTENSIONS [EXTENSIONS ...]] [-l] [--log_path [LOG_PATH]] -m
-                 {export,import,mp3tag,test,tag_external} [-o] [-p] [-s] [--standardize [{keep,force.xx,force.xxx}]]
+usage: lyrict.py [-h] [-d [DIRECTORY]] [--delete] [-e EXTENSIONS [EXTENSIONS ...]] [-l]
+                 [--log_path [LOG_PATH]] -m {export,import,mp3tag,test,tag_external} [-o] [-p]
+                 [-s] [--standardize [{keep,force.xx,force.xxx}]]
 
-Test .lrc and .txt lyrics for broken links, embed synced and unsynced lyrics into tags, extract them from tags to
-files or populate the tags of external lyrics based on the tags of linked files.
+Test .lrc and .txt lyrics for broken links, embed synced and unsynced lyrics into tags, extract
+them from tags to files or populate the tags of external lyrics based on the tags of linked files.
 
 options:
   -h, --help            show this help message and exit
   -d [DIRECTORY], --directory [DIRECTORY]
-                        test, import, mp3tag, tag_external: The directory to scan for .lrc and .txt files. export:
-                        Directory to scan for music files.
-  --delete              Import: After successful import, deletes external .lrc and .txt files from disk. Export: After
-                        successful export, deletes LYRICS, SYLT and USLT tags from mp3 files and LYRICS and
-                        UNSYNCEDLYRICS tags from flac files.
+                        test, import, mp3tag, tag_external: The directory to scan for .lrc and
+                        .txt files. export: Directory to scan for music files.
+  --delete              Import: After successful import, deletes external .lrc and .txt files from
+                        disk. Export: After successful export, deletes LYRICS, SYLT and USLT tags
+                        from mp3 files and LYRICS and UNSYNCEDLYRICS tags from flac files.
   -e EXTENSIONS [EXTENSIONS ...], --extensions EXTENSIONS [EXTENSIONS ...]
-                        Test, Import, mp3tag: List of song extensions the script will look for, default: flac and mp3.
-                        Export: Song extensions that will be scanned for embedded lyrics, default flac and mp3
-  -l, --log             Test, mp3tag: Log filepaths (lyric and music extension) to "lyrict_results.log". "-ll" logs
-                        each filetype separately (lrc_flac.log, txt_mp3.log...) instead. Import, Export: log
-                        embedding/exporting results to "lyrict_import_results"/"lyrict_export_results"
+                        Test, Import, mp3tag: List of song extensions the script will look for,
+                        default: flac and mp3. Export: Song extensions that will be scanned for
+                        embedded lyrics, default flac and mp3
+  -l, --log             Test, mp3tag: Log filepaths (lyric and music extension) to
+                        "lyrict_results.log". "-ll" logs each filetype separately (lrc_flac.log,
+                        txt_mp3.log...) instead. Import, Export: log embedding/exporting results
+                        to "lyrict_import_results"/"lyrict_export_results"
   --log_path [LOG_PATH]
                         The directory to save logs to when used with -l or -ll, defaults to "."
   -m {export,import,mp3tag,test,tag_external}
-                        Mode, use 'test' to only log linked/unlinked songs to console or to file(s) when used with -l
-                        or -ll. Use 'mp3tag' to embed external lyrics (.txt/.lrc) in audio tags via mp3tag. Use
-                        'import' to embed external lyrics (.txt/.lrc) in audio tags via mutagen. Use 'export' to
-                        export embedded tags to external files (.lrc/.txt) via mutagen. Use 'tag_external' to rewrite
-                        existing .lrc/.txt files and populate/update tag information like [ar:artist] at the start of
-                        the file.
-  -o, --overwrite       mp3tag: Overwrite/recreate the mp3tag actions to reflect changes made in the config section.
-                        Import: Purge and overwrite existing embedded lyrics tags (LYRICS/UNSYNCEDLYRICS/SYLT/USLT)
-                        Export: Overwrite the content of existing .lrc/.txt files.
-  -p, --progress        Show progress bars. Useful for huge directories. Requires tqdm, use "pip3 install tqdm" to
-                        install it.
-  -s, --single_folder   Test, Import, mp3tag: Only scans a single folder for .lrc and .txt files, no subdirectories.
-                        Export: Only scans a single folder for music files.
+                        Mode, use 'test' to only log linked/unlinked songs to console or to
+                        file(s) when used with -l or -ll. Use 'mp3tag' to embed external lyrics
+                        (.txt/.lrc) in audio tags via mp3tag. Use 'import' to embed external
+                        lyrics (.txt/.lrc) in audio tags via mutagen. Use 'export' to export
+                        embedded tags to external files (.lrc/.txt) via mutagen. Use
+                        'tag_external' to rewrite existing .lrc/.txt files and populate/update tag
+                        information like [ar:artist] at the start of the file.
+  -o, --overwrite       mp3tag: Overwrite/recreate the mp3tag actions to reflect changes made in
+                        the config section. Import: Purge and overwrite existing embedded lyrics
+                        tags (LYRICS/UNSYNCEDLYRICS/SYLT/USLT) Export: Overwrite the content of
+                        existing .lrc/.txt files.
+  -p, --progress        Show progress bars. Useful for huge directories. Requires tqdm, use "pip3
+                        install tqdm" to install it.
+  -s, --single_folder   Test, Import, mp3tag: Only scans a single folder for .lrc and .txt files,
+                        no subdirectories. Export: Only scans a single folder for music files.
   --standardize [{keep,force.xx,force.xxx}]
-                        Import/Export/tag external: standardize and fix timestamps of synced lyrics. Use 'keep' or
-                        leave empty to retain existing timestamp formats and only fix mistakes like >59 minutes or >59
-                        seconds. Use 'force.xx' to force all existing timestamps into `[hh:mm:ss.xx]` or `[mm:ss.xx]`
-                        format. Use 'force.xxx' to force all existing timestamps into `[hh:mm:ss.xxx]` or
+                        Import/Export/tag external: standardize and fix timestamps of synced
+                        lyrics. Use 'keep' or leave empty to retain existing timestamp formats and
+                        only fix mistakes like >59 minutes or >59 seconds. Use 'force.xx' to force
+                        all existing timestamps into `[hh:mm:ss.xx]` or `[mm:ss.xx]` format. Use
+                        'force.xxx' to force all existing timestamps into `[hh:mm:ss.xxx]` or
                         `[mm:ss.xxx]` format
 ```
 
