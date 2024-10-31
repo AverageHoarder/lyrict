@@ -11,7 +11,7 @@ from tqdm import tqdm
 from datetime import timedelta
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
-from mutagen.id3 import ID3, SYLT, USLT, Encoding
+from mutagen.id3 import ID3, SYLT, USLT, Encoding, TIT2, TPE1, TALB, TCOM, TEXT
 from mutagen.id3._frames import TXXX
 from mutagen.id3._util import ID3NoHeaderError
 
@@ -42,9 +42,10 @@ def parse_arguments():
         else:
             raise argparse.ArgumentTypeError(f"readable_dir:{path} is not a valid path")
         
-    parser = argparse.ArgumentParser(description='Test .lrc and .txt lyrics for broken links, embed synced and unsynced lyrics into tags or extract them from tags to files.')
+    parser = argparse.ArgumentParser(description='''Test .lrc and .txt lyrics for broken links, embed synced and unsynced lyrics into tags,
+extract them from tags to files or populate the tags of external lyrics based on the tags of linked files.''')
     parser.add_argument('-d', '--directory',
-                        help='Test, Import, mp3tag: The directory to scan for .lrc and .txt files. Export: Directory to scan for music files.',
+                        help='test, import, mp3tag, tag_external: The directory to scan for .lrc and .txt files. export: Directory to scan for music files.',
                         type=dir_path, default=".", const=".", nargs="?")
     parser.add_argument('--delete', action='store_true',
                         help=f'''Import: After successful import, deletes external .lrc and .txt files from disk.
@@ -53,9 +54,6 @@ Export: After successful export, deletes LYRICS, SYLT and USLT tags from mp3 fil
                         help='''Test, Import, mp3tag: List of song extensions the script will look for, default: flac and mp3. 
 Export: Song extensions that will be scanned for embedded lyrics, default flac and mp3''',
                         nargs='+', default=["flac", "mp3"])
-    parser.add_argument('--export', action='store_true',
-                        help=f'''Export embedded lyrics of flac and mp3 files. Synced lyrics (LYRICS, SYLT) to .lrc and unsynced lyrics (UNSYNCEDLYRICS/USLT) to .txt files. 
-Requires mutagen, use "pip3 install mutagen" to install it''')
     parser.add_argument('-l', '--log', action='count',
                         help='''Test, mp3tag: Log filepaths (lyric and music extension) to "lyrict_results.log". 
 "-ll" logs each filetype separately (lrc_flac.log, txt_mp3.log...) instead.
@@ -63,11 +61,12 @@ Import, Export: log embedding/exporting results to "lyrict_import_results"/"lyri
     parser.add_argument('--log_path',
                         help='The directory to save logs to when used with -l or -ll, defaults to "."',
                         type=dir_path, default=".", const=".", nargs="?")
-    parser.add_argument('-m', choices=['export', 'import', 'mp3tag', 'test'], required=True,
+    parser.add_argument('-m', choices=['export', 'import', 'mp3tag', 'test', 'tag_external'], required=True,
                         help="""Mode, use 'test' to only log linked/unlinked songs to console or to file(s) when used with -l or -ll.
 Use 'mp3tag' to embed external lyrics (.txt/.lrc) in audio tags via mp3tag.
 Use 'import' to embed external lyrics (.txt/.lrc) in audio tags via mutagen.
 Use 'export' to export embedded tags to external files (.lrc/.txt) via mutagen.
+Use 'tag_external' to rewrite existing .lrc/.txt files and populate/update tag information like [ar:artist] at the start of the file.
 """)
     parser.add_argument('-o', '--overwrite', action='store_true',
                         help='''mp3tag: Overwrite/recreate the mp3tag actions to reflect changes made in the config section.
@@ -77,8 +76,11 @@ Export: Overwrite the content of existing .lrc/.txt files.''')
                         help='Show progress bars. Useful for huge directories. Requires tqdm, use "pip3 install tqdm" to install it.')       
     parser.add_argument('-s', '--single_folder', action='store_true',
                         help='Test, Import, mp3tag: Only scans a single folder for .lrc and .txt files, no subdirectories. Export: Only scans a single folder for music files.')
-    parser.add_argument('--standardize', action='store_true',
-                        help=f'Import/Export: standardize and fix timestamps of synced lyrics to `[mm:ss.xxx]text`, `[hh:mm:ss.xxx]text`, `[mm:ss]text` or `[hh:mm:ss]text` formats (depending on their source format)')
+    parser.add_argument('--standardize', choices=['keep', 'force.xx', 'force.xxx'], default='keep', const='keep', nargs="?",
+                        help=f'''Import/Export/tag external: standardize and fix timestamps of synced lyrics.
+Use 'keep' or leave empty to retain existing timestamp formats and only fix mistakes like >59 minutes or >59 seconds.
+Use 'force.xx' to force all existing timestamps into `[hh:mm:ss.xx]` or `[mm:ss.xx]` format.
+Use 'force.xxx' to force all existing timestamps into `[hh:mm:ss.xxx]` or `[mm:ss.xxx]` format''')
 
     args: argparse.Namespace = parser.parse_args()
 
@@ -94,6 +96,8 @@ Export: Overwrite the content of existing .lrc/.txt files.''')
     setattr(args, "import_mode", False)
     setattr(args, "test_mode", False)
     setattr(args, "mp3tag_mode", False)
+    setattr(args, "tag_external_mode", False)
+
     if args.m == 'export':
         setattr(args, "export_mode", True)
     elif args.m == 'import':
@@ -102,6 +106,8 @@ Export: Overwrite the content of existing .lrc/.txt files.''')
         setattr(args, "test_mode", True)
     elif args.m == 'mp3tag':
         setattr(args, "mp3tag_mode", True)
+    elif args.m == 'tag_external':
+        setattr(args, "tag_external_mode", True)
 
     return args
 
@@ -370,24 +376,25 @@ def read_lyrics(file_path):
 
 def parse_lrc_to_sylt(lyrics):
     sylt_lyrics = []
-    language_pattern = re.compile(r'^\[la: *(\w{2,3})\]$')
-    offset_pattern = re.compile(r'^\[offset: *([+-]\d+)\]$')
+    language_pattern = re.compile(r'^\[la: *(\w{2,3})\]$', re.IGNORECASE | re.MULTILINE)
+    offset_pattern = re.compile(r'^\[offset: *([+-]\d+)\]$', re.IGNORECASE | re.MULTILINE)
     timestamp_pattern = re.compile(r'^\[(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})(?:\.(\d{2,3}))?\] *(?!(?:.*<\d{1,3}:|\[\d{1,3}:))(.*)$')
     mutli_timestamp_check_pattern = re.compile(r'^(?:\[(?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?\] *){2,}.*$')
     multi_timestamp_pattern = re.compile(r'(\[(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})(?:\.(\d{2,3}))?\])')
     multi_text_pattern = re.compile(r'^(?:\[(?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?\])+ *(.*)$')
-    lines = lyrics.split('\n')
+    lines = lyrics.splitlines()
     omitted_lines = []
     language = ""
     offset = 0
+    
     # Determine language and offset
-    for line in itertools.islice(lines, 20):
-        match_lang = re.match(language_pattern, line)
-        match_offset = re.match(offset_pattern, line)
-        if match_lang:
+    match_lang = language_pattern.search(lyrics)
+    if match_lang:
             language = match_lang.group(1)
-        if match_offset:
+    match_offset = offset_pattern.search(lyrics)
+    if match_offset:
             offset = int(match_offset.group(1))
+
     # Default to English if no language tag was detected in the .lrc file
     if not language:
         language = "eng"
@@ -428,7 +435,7 @@ def embed_lyrics_flac(flac_file, lyrics=None, unsynced_lyrics=None, standardize=
     if not 'LYRICS' in audio or overwrite: # Embed if lyrics are not already embedded or when overwrite is True
         if lyrics:
             if standardize:
-                lyrics = standardize_timestamps(lyrics)
+                lyrics = standardize_timestamps(lyrics, standardize)
             audio['LYRICS'] = lyrics
             changed = True
     if not 'UNSYNCEDLYRICS' in audio or overwrite: # Embed if lyrics are not already embedded or when overwrite is True
@@ -560,9 +567,7 @@ def write_import_log(results, separate_logs, log_path):
             if len(results[category]) > 0:
                 with open(os.path.join(log_path, f"lyrict_import_{category}.log"), "w", encoding="utf8") as log:
                     for result_path in results[category]:
-                        log.write(f"{result_path}\n")    
-
-
+                        log.write(f"{result_path}\n")
 
 #################################### EXPORT MUTAGEN ########################################
 # Find all music files specified in -e, --extensions, default FLAC, MP3
@@ -628,10 +633,11 @@ def extract_sylt_to_lrc(sylt_frame):
         # Convert milliseconds to timedelta
         duration = timedelta(milliseconds=timestamp)
         
-        # Extract hours, minutes, seconds, and milliseconds
-        hours, remainder = divmod(duration.seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        milliseconds = duration.microseconds // 1000  # Get milliseconds
+        # Directly extract hours, minutes, seconds, and milliseconds
+        hours = duration.seconds // 3600
+        minutes = (duration.seconds % 3600) // 60
+        seconds = duration.seconds % 60
+        milliseconds = duration.microseconds // 1000  # Convert microseconds directly to milliseconds
 
         # Format the output as [hh:mm:ss.xxx] or [mm:ss.xxx]
         if hours > 0:
@@ -673,7 +679,7 @@ def process_mp3(file_path, synced_lyrics, unsynced_lyrics, standardize):
         elif isinstance(tag, TXXX) and tag.desc == "LYRICS":
             lyrics = tag.text[0]
             if standardize:
-                lyrics = standardize_timestamps(lyrics)
+                lyrics = standardize_timestamps(lyrics, standardize)
                 
             # For TXXX, there's no language field, so we append None for language
             synced_lyrics.append((file_path, lyrics, None, None))
@@ -689,7 +695,7 @@ def process_flac(file_path, synced_lyrics, unsynced_lyrics, standardize):
     if "LYRICS" in audio:
         lyrics = audio["LYRICS"][0]
         if standardize:
-            lyrics = standardize_timestamps(lyrics)
+            lyrics = standardize_timestamps(lyrics, standardize)
         synced_lyrics.append((file_path, lyrics, None, None))
         synced = True
     if "UNSYNCEDLYRICS" in audio:
@@ -698,7 +704,7 @@ def process_flac(file_path, synced_lyrics, unsynced_lyrics, standardize):
     return synced, unsynced
 
 # standardize timestamps, output formats hh:mm:ss.xxx, hh:mm:ss, mm:ss.xxx, mm:ss
-def standardize_timestamps(lyrics):
+def standardize_timestamps(lyrics, standardize):
     def fix_timestamp(match):
         # Split the timestamp into components
         units_split = re.match(split_timestamp_pattern, match.group(1))
@@ -706,49 +712,78 @@ def standardize_timestamps(lyrics):
         hours = int(units_split.group(1)) if units_split.group(1) else 0
         minutes = int(units_split.group(2))
         seconds = int(units_split.group(3))
-        milliseconds = int(units_split.group(4)) if units_split.group(4) else None
+        milliseconds = int(units_split.group(4).ljust(3, '0')) if units_split.group(4) else None
+        raw_ms = units_split.group(4)
 
         # Use timedelta to handle atypical timestamps
         total_time = timedelta(hours=hours, minutes=minutes, seconds=seconds, milliseconds=milliseconds or 0)
         
-        # Convert the timedelta back into hours, minutes, seconds, and milliseconds
-        total_seconds = total_time.total_seconds()
-        hours, remainder = divmod(total_seconds, 3600)
-        minutes, remainder = divmod(remainder, 60)
-        seconds = int(remainder)
-        milliseconds = int((remainder - seconds) * 1000)
+        # Directly extract hours, minutes, seconds, and milliseconds
+        hours = total_time.seconds // 3600
+        minutes = (total_time.seconds % 3600) // 60
+        seconds = total_time.seconds % 60
+        milliseconds = total_time.microseconds // 1000  # Convert microseconds directly to milliseconds
 
-        # Format the timestamp accordingly
-        if hours:
-            formatted_time = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
-            if units_split.group(4) is not None:  # If milliseconds were present in original format
-                formatted_time += f".{milliseconds:03}"
-        else:
-            formatted_time = f"{int(minutes):02}:{int(seconds):02}"
-            if units_split.group(4) is not None:  # If milliseconds were present in original format
-                formatted_time += f".{milliseconds:03}"
+        if standardize == 'keep':
+            # Format the timestamp accordingly
+            if hours:
+                formatted_time = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+                if raw_ms:  # If milliseconds were present in original format
+                    if re.match(two_digit_pattern, raw_ms):
+                        formatted_time += f".{raw_ms.ljust(2, '0')[:2]}"
+                    elif re.match(three_digit_pattern, raw_ms):
+                        formatted_time += f".{milliseconds:03}"
+            else:
+                formatted_time = f"{int(minutes):02}:{int(seconds):02}"
+                if raw_ms:  # If milliseconds were present in original format
+                    if re.match(two_digit_pattern, raw_ms):
+                        formatted_time += f".{raw_ms.ljust(2, '0')[:2]}"
+                    elif re.match(three_digit_pattern, raw_ms):
+                        formatted_time += f".{milliseconds:03}"
+        elif standardize == 'force.xx':
+            # Format the timestamp accordingly
+            if hours:
+                formatted_time = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+                if raw_ms:  # If milliseconds were present in original format
+                    formatted_time += f".{raw_ms.ljust(2, '0')[:2]}"
+                else:
+                    formatted_time += ".00"
+            else:
+                formatted_time = f"{int(minutes):02}:{int(seconds):02}"
+                if raw_ms:  # If milliseconds were present in original format
+                    formatted_time += f".{raw_ms.ljust(2, '0')[:2]}"
+                else:
+                    formatted_time += ".00"
+        elif standardize == 'force.xxx':
+            # Format the timestamp accordingly
+            if hours:
+                formatted_time = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+                if raw_ms:  # If milliseconds were present in original format
+                    formatted_time += f".{milliseconds:03}"
+                else:
+                    formatted_time += ".000"
+            else:
+                formatted_time = f"{int(minutes):02}:{int(seconds):02}"
+                if raw_ms:  # If milliseconds were present in original format
+                    formatted_time += f".{milliseconds:03}"
+                else:
+                    formatted_time += ".000"
         return formatted_time
 
     # Regular expressions for matching timestamps
-    timestamp_pattern = re.compile(r"(?<=[\[<])((?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?)(?=[\]>])")
+    timestamp_pattern = re.compile(r"(?<=[\[<])((?:\d{1,2}:)?\d{1,3}:\d{1,2}(?:\.\d{2,3})?)(?=[\]>])", re.MULTILINE)
     split_timestamp_pattern = re.compile(r"(?:(\d{1,2}):)?(\d{1,3}):(\d{1,2})(?:\.(\d{2,3}))?")
+    two_digit_pattern = re.compile(r'^\d{2}$')
+    three_digit_pattern = re.compile(r'^\d{3}$')
 
-    # Split lyrics into lines
-    lines = lyrics.split('\n')
-    standardized_lyrics = []
+    # Replace timestamps and remove space after each timestamp in one go
+    lyrics = re.sub(timestamp_pattern, fix_timestamp, lyrics)
+    lyrics = re.sub(r"(\d{2}\]) +", r"\1", lyrics)
 
-    # Process each line
-    for line in lines:
-        # First, replace the timestamp with standardized format
-        standardized_line = re.sub(timestamp_pattern, fix_timestamp, line)
-        
-        # Then, remove any space immediately after the closing bracket of the timestamp
-        standardized_line = re.sub(r"(\d{2}\])\s+", r"\1", standardized_line)
-        
-        standardized_lyrics.append(standardized_line)
-    
-    return '\n'.join(standardized_lyrics)
+    # Reduce multiple empty lines to a single empty line
+    lyrics = re.sub(r'\n{2,}', '\n\n', lyrics)
 
+    return lyrics
 
 # Export embedded lyrics to .lrc and .txt files
 def write_lrc_files(lyrics, extension, overwrite, progress, write_success):
@@ -760,7 +795,7 @@ def write_lrc_files(lyrics, extension, overwrite, progress, write_success):
             pbar.update(1)
             basename = os.path.splitext(filename)[0]
             lyrics_filename = basename + extension
-            language_pattern = r'\[la: *(\w{2,3})\]'
+            language_pattern = re.compile(r'\[la: *(\w{2,3})\]')
             if extension == ".lrc" and lang is not None:
                 if re.search(language_pattern, lyrics):
                     lyrics = re.sub(language_pattern, f"[la:{lang}]", lyrics)
@@ -855,6 +890,146 @@ def export_log(write_success, separate_logs, log_path):
                     for result_path, extension in write_success[category]:
                         log.write(f"{result_path} to {extension}\n")
 
+#################################### TAG EXTERNAL ########################################
+def get_tags(file_path, extension):
+    def format_time(time_in_seconds):
+        duration = timedelta(seconds=time_in_seconds)
+
+        # Extract hours, minutes and seconds
+        hours = duration.seconds // 3600
+        minutes = (duration.seconds % 3600) // 60
+        seconds = duration.seconds % 60
+
+        # Format the output as hh:mm:ss or mm:ss
+        if hours > 0:
+            timestamp_formatted = f'{hours:02}:{minutes:02}:{seconds:02}'
+        else:
+            timestamp_formatted = f'{minutes:02}:{seconds:02}'
+        return timestamp_formatted
+
+    tags = {
+        "artist": None,
+        "album": None,
+        "title": None,
+        "composer": None,
+        "lyricist": None,
+        "length": None
+    }
+    
+    if extension == "flac":
+        # Load FLAC file and read tags
+        audio = FLAC(file_path)
+        tags["artist"] = audio.get("artist", [None])[0]
+        tags["album"] = audio.get("album", [None])[0]
+        tags["title"] = audio.get("title", [None])[0]
+        tags["composer"] = audio.get("composer", [None])[0]
+        tags["lyricist"] = audio.get("lyricist", [None])[0] or audio.get("writer", [None])[0]
+        tags["length"] = format_time(audio.info.length)
+
+    elif extension == "mp3":
+        # Load MP3 file and read ID3 tags
+        audio = MP3(file_path, ID3=ID3)
+        tags["title"] = audio.get("TIT2", TIT2()).text[0] if audio.get("TIT2") else None
+        tags["artist"] = audio.get("TPE1", TPE1()).text[0] if audio.get("TPE1") else None
+        tags["album"] = audio.get("TALB", TALB()).text[0] if audio.get("TALB") else None
+        tags["composer"] = audio.get("TCOM", TCOM()).text[0] if audio.get("TCOM") else None
+        tags["lyricist"] = audio.get("TEXT", TEXT()).text[0] if audio.get("TEXT") else None
+        tags["length"] = format_time(audio.info.length)
+
+    return tags
+
+def rewrite_external_lyrics(lrc_path, lyrics, tags, results, standardize):
+    original_lyrics = lyrics
+    if standardize and os.path.splitext(lrc_path)[1] == ".lrc":
+        lyrics = standardize_timestamps(lyrics, standardize)
+    # Regular expression patterns to match all tag types
+    patterns = {
+        "artist": re.compile(r'^\[ar: *(.*) *\]$', re.IGNORECASE | re.MULTILINE),
+        "album": re.compile(r'^\[al: *(.*) *\]$', re.IGNORECASE | re.MULTILINE),
+        "title": re.compile(r'^\[ti: *(.*) *\]$', re.IGNORECASE | re.MULTILINE),
+        "author": re.compile(r'^\[au: *(.*) *\]$', re.IGNORECASE | re.MULTILINE),
+        "length": re.compile(r'^\[length: *(.*) *\]$', re.IGNORECASE | re.MULTILINE),
+        "language": re.compile(r'^\[la: *(\w{2,3})\]$', re.IGNORECASE | re.MULTILINE),
+        "offset": re.compile(r'^\[offset: *([+-]?\d+)\]$', re.IGNORECASE | re.MULTILINE),
+        "lrc_author": re.compile(r'^\[by: *(.*) *\]$', re.IGNORECASE | re.MULTILINE),
+        "creation_software": re.compile(r'^\[(?:re|tool): *(.*) *\]$', re.IGNORECASE | re.MULTILINE),
+        "software_version": re.compile(r'^\[ve: *(.*) *\]$', re.IGNORECASE | re.MULTILINE),
+    }
+    
+    # Extracted data will initially be set to None
+    extracted = {key: None for key in patterns}
+
+    # Search and extract values for each tag using the patterns
+    for key, pattern in patterns.items():
+        match = pattern.search(lyrics)
+        if match:
+            extracted[key] = match.group(1)  # Capture the first group, which is the tag value
+            lyrics = pattern.sub('', lyrics)  # Remove matched tag line from lyrics
+
+    # Decide on "author" field with preference for lyricist if present
+    final_tags = {key: tags.get(key) or extracted[key] for key in extracted}
+    final_tags["author"] = tags.get("lyricist") or extracted["author"] or tags.get("composer")
+
+    # Create new header lines with non-None final tags
+    header_lines = []
+    if final_tags["artist"]:
+        header_lines.append(f"[ar:{final_tags['artist']}]")
+    if final_tags["album"]:
+        header_lines.append(f"[al:{final_tags['album']}]")
+    if final_tags["title"]:
+        header_lines.append(f"[ti:{final_tags['title']}]")
+    if final_tags["author"]:
+        header_lines.append(f"[au:{final_tags['author']}]")
+    if final_tags["length"]:
+        header_lines.append(f"[length:{final_tags['length']}]")
+    if final_tags["language"]:
+        header_lines.append(f"[la:{final_tags['language']}]")
+    if final_tags["offset"]:
+        header_lines.append(f"[offset:{final_tags['offset']}]")
+    if final_tags["lrc_author"]:
+        header_lines.append(f"[by:{final_tags['lrc_author']}]")
+    if final_tags["creation_software"]:
+        header_lines.append(f"[re:{final_tags['creation_software']}]")
+    if final_tags["software_version"]:
+        header_lines.append(f"[ve:{final_tags['software_version']}]")
+
+    # Combine header and cleaned lyrics
+    updated_lyrics = "\n".join(header_lines + [lyrics.strip()])
+
+    # If nothing changed, don't rewrite the lyrics
+    if original_lyrics == updated_lyrics:
+        results["skipped"].append(lrc_path)
+        return
+
+    # Write updated lyrics back to the file
+    try:
+        with open(lrc_path, 'w', encoding='utf-8') as file:
+            file.write(updated_lyrics)
+        results["fixed"].append(lrc_path)
+    except PermissionError:
+        results["failed"].append(lrc_path)
+        print(f"Could not open {lrc_path} for writing.")
+
+def write_tag_external_log(results, separate_logs, log_path):
+    if not os.access(log_path, os.W_OK | os.X_OK):
+        print("Cannot write log file(s) to current directory. Ensure that you have write permission. Skipping log creation.")
+        return
+    categories = results.keys()
+    if not separate_logs:
+        with open(os.path.join(log_path, f"lyrict_tag_external_results.log"), "w", encoding="utf8") as log:
+            for category in categories:
+                if len(results[category]) > 0:
+                    log.write(f"{category} files:\n")
+                    for result_path in sorted(set(results[category])):
+                            log.write(result_path+"\n")
+                    log.write("\n")
+    else:
+        for category in categories:
+            if len(results[category]) > 0:
+                with open(os.path.join(log_path, f"lyrict_import_{category}.log"), "w", encoding="utf8") as log:
+                    for result_path in sorted(set(results[category])):
+                        log.write(f"{result_path}\n")
+        
 def main(args):
     directory = args.directory
     delete = args.delete
@@ -868,6 +1043,7 @@ def main(args):
     import_mode = args.import_mode
     export_mode = args.export_mode
     test_run = args.test_mode
+    tag_external_mode = args.tag_external_mode
     mp3tag = args.mp3tag_mode
     standardize = args.standardize
 
@@ -998,6 +1174,9 @@ def main(args):
             failed = len(results["failed"])
             deleted = len(results["deleted"])
             print(f"{saved} embedded, {skipped} skipped, {failed} failed, {deleted} external lyrics deleted.")
+            print("Closing in 5 seconds.")
+            sleep(5)
+            sys.exit()
 
     if export_mode:
         music_files = find_music_files(directory, extensions, single_folder, progress)
@@ -1032,7 +1211,62 @@ def main(args):
         print("Closing in 5 seconds.")
         sleep(5)
         sys.exit()
-        
+
+    if tag_external_mode:
+        lrc_paths, txt_paths = find_lrc_files(directory, single_folder, progress)
+        supported_extensions = ["mp3", "flac"]
+        results = {"fixed":[], "skipped":[], "failed":[]}
+        if lrc_paths and txt_paths:
+            match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
+            match_categories_txt = find_matches(txt_paths, "txt", extensions, progress)
+            for extension in supported_extensions:
+                if extension in match_categories_lrc:
+                    with tqdm(total = len(match_categories_lrc[extension]), desc= f"fixing {extension} lrcs", unit=f" lrc files", disable=not progress) as pbar:
+                        for song_path in match_categories_lrc[extension]:
+                            lrc_path = os.path.splitext(song_path)[0] + ".lrc"
+                            lyrics = read_lyrics(lrc_path)
+                            tags = get_tags(song_path, extension)
+                            rewrite_external_lyrics(lrc_path, lyrics, tags, results, standardize)
+                            pbar.update(1)
+                if extension in match_categories_txt:
+                    with tqdm(total = len(match_categories_txt[extension]), desc= f"fixing {extension} txts", unit=f" txt files", disable=not progress) as pbar:
+                        for song_path in match_categories_txt[extension]:
+                            txt_path = os.path.splitext(song_path)[0] + ".txt"
+                            lyrics = read_lyrics(txt_path)
+                            tags = get_tags(song_path, extension)
+                            rewrite_external_lyrics(txt_path, lyrics, tags, results, standardize)
+                            pbar.update(1)
+        elif lrc_paths and not txt_paths:
+            match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
+            for extension in supported_extensions:
+                if extension in match_categories_lrc:
+                    with tqdm(total = len(match_categories_lrc[extension]), desc= f"fixing {extension} lrcs", unit=f" lrc files", disable=not progress) as pbar:
+                        for song_path in match_categories_lrc[extension]:
+                            lrc_path = os.path.splitext(song_path)[0] + ".lrc"
+                            lyrics = read_lyrics(lrc_path)
+                            tags = get_tags(song_path, extension)
+                            rewrite_external_lyrics(lrc_path, lyrics, tags, results, standardize)
+                            pbar.update(1)
+        elif not lrc_paths and txt_paths:
+            match_categories_txt = find_matches(lrc_paths, "txt", extensions, progress)
+            for extension in supported_extensions:
+                if extension in match_categories_txt:
+                    with tqdm(total = len(match_categories_txt[extension]), desc= f"fixing {extension} txts", unit=f" txt files", disable=not progress) as pbar:
+                        for song_path in match_categories_lrc[extension]:
+                            txt_path = os.path.splitext(song_path)[0] + ".txt"
+                            lyrics = read_lyrics(txt_path)
+                            tags = get_tags(song_path, extension)
+                            rewrite_external_lyrics(txt_path, lyrics, tags, results, standardize)
+                            pbar.update(1)
+        fixed = len(set(results["fixed"]))
+        skipped = len(set(results["skipped"]))
+        failed = len(set(results["failed"]))
+        if log_to_disk:
+            write_tag_external_log(results, separate_logs, log_path)
+        print(f"{fixed} fixed, {skipped} skipped, {failed} failed.")
+        print("Closing in 5 seconds.")
+        sleep(5)
+        sys.exit()
 if __name__ == "__main__":
     args = parse_arguments()
     try:
