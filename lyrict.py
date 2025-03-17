@@ -5,7 +5,6 @@ import subprocess
 import shutil
 import getpass
 import argparse
-import itertools
 from time import sleep
 from tqdm import tqdm
 from datetime import timedelta
@@ -14,6 +13,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3, SYLT, USLT, Encoding, TIT2, TPE1, TALB, TCOM, TEXT
 from mutagen.id3._frames import TXXX
 from mutagen.id3._util import ID3NoHeaderError
+from collections import defaultdict
 
 ################################# MP3TAG CONFIG ######################################
 
@@ -113,89 +113,92 @@ Use 'force.xxx' to force all existing timestamps into `[hh:mm:ss.xxx]` or `[mm:s
 
 ########################################## SHARED ############################################
 # Find all .lrc and .txt files in the directory specified with -d, recursively if not called with -s, --single
-def find_lrc_files(directory, single_folder, progress):
-    lrc_files = []
-    txt_files = []
-    pattern = r'^\d{2,3}\s' # Pattern to filter .txt files, default filters for names starting with 2 or 3 digits and a space, like "01 Hello.flac"
+def find_lyrics_files(directory, single_folder, progress):
+    lyrics_files = defaultdict(list)
+    txt_pattern = re.compile(r'^\d{2,3}\s') # Pattern to filter .txt files, default filters for names starting with 2 or 3 digits and a space, like "01 Hello.flac"
 
     if not single_folder:
-        with tqdm(desc="searching", unit=" files", disable=not progress) as pbar:
+        with tqdm(desc="searching", unit=" files", disable=not progress, ncols=100) as pbar:
             lrc_count = 0
             txt_count = 0
             for root, dirs, files in os.walk(directory):
                 for file in files:
                     pbar.update(1)
                     if file.endswith(".lrc"):
-                        lrc_files.append(os.path.join(os.path.abspath(root), file))
+                        lyrics_files["lrc"].append(os.path.join(os.path.abspath(root), file))
                         lrc_count += 1
                         pbar.set_postfix({"lrc": lrc_count, "txt": txt_count})
-                    elif file.endswith(".txt") and re.match(pattern, file):
-                        txt_files.append(os.path.join(os.path.abspath(root), file))
+                    elif file.endswith(".txt") and re.match(txt_pattern, file):
+                        lyrics_files["txt"].append(os.path.join(os.path.abspath(root), file))
                         txt_count += 1
                         pbar.set_postfix({"lrc": lrc_count, "txt": txt_count})
     else:
-        with tqdm(desc="searching", unit=" files", disable=not progress) as pbar:
+        with tqdm(desc="searching", unit=" files", disable=not progress, ncols=100) as pbar:
             lrc_count = 0
             txt_count = 0
             for file in os.listdir(directory):
                 if file.endswith(".lrc"):
-                    lrc_files.append(os.path.join(os.path.abspath(directory), file))
+                    lyrics_files["lrc"].append(os.path.join(os.path.abspath(root), file))
                     lrc_count += 1
                     pbar.set_postfix({"lrc": lrc_count, "txt": txt_count})              
-                elif file.endswith(".txt")and re.match(pattern, file):
-                    txt_files.append(os.path.join(os.path.abspath(directory), file))
+                elif file.endswith(".txt")and re.match(txt_pattern, file):
+                    lyrics_files["txt"].append(os.path.join(os.path.abspath(root), file))
                     txt_count += 1
                     pbar.set_postfix({"lrc": lrc_count, "txt": txt_count})
 
-    if len(lrc_files) == 0:
-        lrc_files = None
-    if len(txt_files) == 0:
-        txt_files = None
-    if not lrc_files and not txt_files:
+    if not lyrics_files:
         print("No external lyrics (.lrc/.txt) found, closing in 5 seconds.")
         sleep(5)
         sys.exit()
     else:
-        return lrc_files, txt_files
+        return lyrics_files
 
 # Find matching songs from -e, --extensions list for .lrc and .txt files
-def find_matches(lyric_paths, file_ext, extensions, progress):
-    match_categories = dict.fromkeys(extensions)
-    for ext in extensions:
-        match_categories[ext] = []
-    match_categories["unlinked"] = []
-    with tqdm(total = len(lyric_paths), desc= f"finding {file_ext} matches", unit=f" {file_ext} files", disable=not progress) as pbar:
-        for song in lyric_paths:
-            hits = False
-            for ext in extensions:
-                song_path = os.path.splitext(song)[0] + f'.{ext}'
-                if os.path.isfile(song_path):
-                    match_categories[ext].append(song_path)
-                    hits = True
-                    pbar.update(1)
-            if not hits:
-                match_categories["unlinked"].append(song)
-    match_categories = {key: value for key, value in match_categories.items() if value != []}
+def find_matches(lyrics_files, extensions, progress):
+    match_categories = {}
+    for lyrics_type, paths in lyrics_files.items():
+        match_categories[lyrics_type] = defaultdict(list)
+        with tqdm(total = len(paths), desc= f"finding {lyrics_type} matches", unit=f" {lyrics_type} files", disable=not progress, ncols=100) as pbar:
+            for song in paths:
+                hits = False
+                for ext in extensions:
+                    song_path = os.path.splitext(song)[0] + f'.{ext}'
+                    if os.path.isfile(song_path):
+                        match_categories[lyrics_type][ext].append(song_path)
+                        hits = True
+                        pbar.update(1)
+                if not hits:
+                    match_categories[lyrics_type]["unlinked"].append(song)
     return match_categories
 
 ##################################### IMPORT MP3TAG #############################################
 # Open only songs with matching lyrics in mp3tag via CLI
-def add_to_mp3tag(match_categories, first_track=True):
-    for ext in match_categories.keys():
-        for track in match_categories[ext]:
-            if first_track:
-                try:
-                    subprocess.Popen(["mp3tag", "/fn:" + track])
-                except subprocess.CalledProcessError:
-                    print(f"Error while opening {track} in mp3tag.")
-                first_track = False
-                sleep(1)
-            else:
-                try:
-                    subprocess.run(["mp3tag", "/add", "/fn:" + track])
-                except subprocess.CalledProcessError:
-                    print(f"Error while adding {track} to mp3tag.")
-    return
+def add_to_mp3tag(match_categories):
+    # Create a temporary .m3u8 file containing all songs with linked lyrics
+    file_paths = set()  # Use a set to remove duplicates
+
+    # Collect all file paths
+    for audio_types in match_categories.values():
+        for file_list in audio_types.values():
+            file_paths.update(file_list)
+
+    # Sort file paths
+    sorted_paths = sorted(file_paths)
+
+    # Write to .m3u8 file
+    with open("lyrict_temp.m3u8", "w", encoding="utf-8") as f:
+        f.write("#EXTM3U\n")  # M3U8 header
+        for file in sorted_paths:
+            f.write(f"{file}\n")
+    try:
+        print("Waiting for Mp3tag to close before removing lyrict_temp.m3u8.")
+        subprocess.run(["mp3tag", "/fn:lyrict_temp.m3u8"])
+    except subprocess.CalledProcessError:
+        print(f"Error while opening lyrict_temp.m3u8 in Mp3tag.")
+    try:
+        os.remove("lyrict_temp.m3u8")
+    except:
+        print("Could not remove lyrict_temp.m3u8.")
 
 # Check if mp3tag is on PATH and instruct how to add it if it isn't (Windows only)
 def mp3tag_on_path():
@@ -225,7 +228,7 @@ def mp3tag_on_path():
         return
 
 # Create mp3tag actions to backup existing embedded lyrics, import external lyrics and delete the lyrics backups
-def mp3tag_create_actions(action_folder, overwrite_actions, extensions):
+def mp3tag_create_actions(action_folder, overwrite):
     class Mp3tagAction:
         action_list = []
         def __init__(self, name, content):
@@ -235,11 +238,11 @@ def mp3tag_create_actions(action_folder, overwrite_actions, extensions):
             Mp3tagAction.action_list.append(self)
         def create(self):
             choice = ""
-            if os.path.isfile(self.path) and not overwrite_actions:
+            if os.path.isfile(self.path) and not overwrite:
                 return
-            if not overwrite_actions:
+            if not overwrite:
                 choice = input(f"Create a mp3tag action called '{self.name}' in:\n{action_folder}? (y/n): ")
-            if choice == "y" or overwrite_actions:
+            if choice == "y" or overwrite:
                 try:
                     with open(self.path, "w", encoding="utf-8") as action:
                         action.write(self.content)
@@ -262,112 +265,63 @@ def mp3tag_create_actions(action_folder, overwrite_actions, extensions):
     [action.create() for action in Mp3tagAction.action_list]
 
 # Open songs with both types of matching lyrics (synced/unsynced) in mp3tag
-def mp3tag_flow_both(match_categories_lrc, match_categories_txt, action_folder, overwrite_actions, extensions):
+def mp3tag_open_songs(match_categories, action_folder, overwrite):
     errors = False
-    if "unlinked" in match_categories_lrc.keys():
-        print(f"LRC files without linked songs found:")
-        for file_path in match_categories_lrc["unlinked"]:
-            print(file_path)
-        del match_categories_lrc["unlinked"]
-        errors = True
-    if "unlinked" in match_categories_txt.keys():
-        print(f"TXT files without linked songs found:")
-        for file_path in match_categories_txt["unlinked"]:
-            print(file_path)
-        del match_categories_txt["unlinked"]
-        errors = True
-    
-    if errors and len(match_categories_lrc) > 0 or errors and len(match_categories_txt) > 0:
-        choice = input(f"Open songs with external lyrics in mp3tag anyhow? (y/n): ")
-        if choice == "y":
-            mp3tag_on_path()
-            if not os.path.isdir(action_folder):
-                print(f"{action_folder} not found, skipping action creation.")
-            else:
-                mp3tag_create_actions(action_folder, overwrite_actions, extensions)
-            first_execution = True
-            if len(match_categories_lrc) > 0:
-                add_to_mp3tag(match_categories_lrc, first_execution)
-                first_execution = False
-            if len(match_categories_txt) > 0:
-                add_to_mp3tag(match_categories_txt, first_execution)
+    for lyrics_type, audio_types in match_categories.items():
+        if "unlinked" in audio_types:
+            print(f"{lyrics_type.upper()} files without linked songs found:")
+            for path in match_categories[lyrics_type]["unlinked"]:
+                print(path)
+            errors = True
+    if errors:
+        # Remove 'unlinked' keys from match_categories and remove empty categories.
+        cleaned_match_categories = {
+        lyrics_type: {k: v for k, v in audio_types.items() if k != "unlinked"}
+        for lyrics_type, audio_types in match_categories.items()
+        if any(k != "unlinked" for k in audio_types)
+        }
+        if cleaned_match_categories:
+            choice = input(f"Open songs with external lyrics in Mp3tag anyhow? (y/n): ")
+            if choice == "y":
+                mp3tag_on_path()
+                if not os.path.isdir(action_folder):
+                    print(f"{action_folder} not found, skipping action creation.")
+                else:
+                    mp3tag_create_actions(action_folder=action_folder, overwrite=overwrite)
+                add_to_mp3tag(match_categories=cleaned_match_categories)
         else:
-            print("Exiting.")
+            print("No linked songs found. Exiting in 1 second.")
+            sleep(1)
             sys.exit()
     else:
-        if len(match_categories_lrc) > 0 or len(match_categories_txt) > 0:
-            choice = input(f"Open songs with external lyrics in mp3tag? (y/n): ")
-            if choice == "y":
-                mp3tag_on_path()
-                if not os.path.isdir(action_folder):
-                    print(f"{action_folder} not found, skipping action creation.")
-                else:
-                    mp3tag_create_actions(action_folder, overwrite_actions, extensions)
-                first_execution = True
-                if len(match_categories_lrc) > 0:
-                    add_to_mp3tag(match_categories_lrc, first_execution)
-                    first_execution = False
-                if len(match_categories_txt) > 0:
-                    add_to_mp3tag(match_categories_txt, first_execution)
-            else:
-                print("Exiting.")
-                sys.exit()
-
-# Open songs with only one type of matching lyrics (synced/unsynced) in mp3tag
-def mp3tag_flow_single(match_categories, action_folder, overwrite_actions, extensions, file_ext):
-    if "unlinked" in match_categories.keys():
-        print(f"{file_ext.upper()} files without linked songs found:")
-        for file_path in match_categories["unlinked"]:
-            print(file_path)
-        del match_categories["unlinked"]
-        if len(match_categories) > 0:
-            choice = input(f"Open songs with external {file_ext} lyrics in mp3tag anyhow? (y/n): ")
-            if choice == "y":
-                mp3tag_on_path()
-                if not os.path.isdir(action_folder):
-                    print(f"{action_folder} not found, skipping action creation.")
-                else:
-                    mp3tag_create_actions(action_folder, overwrite_actions, extensions)
-                add_to_mp3tag(match_categories)
-            else:
-                print("Exiting.")
-                sys.exit()
+        mp3tag_on_path()
+        if not os.path.isdir(action_folder):
+            print(f"{action_folder} not found, skipping action creation.")
         else:
-            sys.exit()
-    else:
-        if len(match_categories) > 0:
-            choice = input(f"Open songs with external {file_ext} lyrics in mp3tag? (y/n): ")
-            if choice == "y":
-                mp3tag_on_path()
-                if not os.path.isdir(action_folder):
-                    print(f"{action_folder} not found, skipping action creation.")
-                else:
-                    mp3tag_create_actions(action_folder, overwrite_actions, extensions)
-                add_to_mp3tag(match_categories)
-            else:
-                print("Exiting.")
-                sys.exit()
-        else:
-            sys.exit()
+            mp3tag_create_actions(action_folder=action_folder, overwrite=overwrite)
+        add_to_mp3tag(match_categories=match_categories)
 
 # Log found lrc paths to disk, grouped by extension and if there is a matching song
-def write_log(match_categories, lyrics_ext, separate_logs, log_path):
+def write_log(match_categories, separate_logs, log_path):
     if not os.access(log_path, os.W_OK | os.X_OK):
         print("Cannot write log file(s) to current directory. Ensure that you have write permission. Skipping log creation.")
         return
-    categories = match_categories.keys()
     if not separate_logs:
-        with open(os.path.join(log_path, f"lyrict_{lyrics_ext}_results.log"), "w", encoding="utf8") as log:
-            for category in categories:
-                log.write(f"{category} results:\n")
-                for result_path in match_categories[category]:
-                    log.write(result_path+"\n")
+        with open(os.path.join(log_path, "lyrict_results.log"), "w", encoding="utf8") as log:
+            for lyrics_filetype, audio_types in match_categories.items():
+                log.write(f"{lyrics_filetype.upper()}:\n")
+                for audio_type in audio_types:
+                    log.write(f"{audio_type}:\n")
+                    for path in match_categories[lyrics_filetype][audio_type]:
+                        log.write(f"{path}\n")
+                    log.write("\n")
                 log.write("\n")
     else:
-        for category in categories:
-            with open(os.path.join(log_path, f"{lyrics_ext}_{category}.log"), "w", encoding="utf8") as log:
-                for result_path in match_categories[category]:
-                    log.write(result_path+"\n")
+        for lyrics_filetype, audio_types in match_categories.items():
+            for audio_type in audio_types:
+                with open(os.path.join(log_path, f"lyrict_{lyrics_filetype}_{audio_type}.log"), "w", encoding="utf8") as log:
+                    for path in match_categories[lyrics_filetype][audio_type]:
+                        log.write(f"{path}\n")
 
 #################################### IMPORT MUTAGEN ########################################
 def read_lyrics(file_path):
@@ -390,14 +344,12 @@ def parse_lrc_to_sylt(lyrics):
     # Determine language and offset
     match_lang = language_pattern.search(lyrics)
     if match_lang:
-            language = match_lang.group(1)
+        language = match_lang.group(1)
+    else:
+        language = "eng" # Default to English if no language tag was detected in the .lrc file
     match_offset = offset_pattern.search(lyrics)
     if match_offset:
             offset = int(match_offset.group(1))
-
-    # Default to English if no language tag was detected in the .lrc file
-    if not language:
-        language = "eng"
 
     for index, line in enumerate(lines):
         if timestamp_pattern.match(line): # Append lines that follow a [timestamp]lyrics pattern.
@@ -469,14 +421,14 @@ def embed_lyrics_mp3(mp3_file, lyrics=None, unsynced_lyrics=None, overwrite=Fals
     # USLT frame
     if not any(isinstance(frame, USLT) for frame in audio.tags.values()) or overwrite: # Embed if lyrics are not already embedded or when overwrite is True    
         if unsynced_lyrics:
-            language_pattern = re.compile(r'^\[la: *(\w{2,3})\]$')
+            language_pattern = re.compile(r'^\[la: *(\w{2,3})\]$', re.IGNORECASE | re.MULTILINE)
             if overwrite:
                 audio.tags.delall('USLT') # delete existing USLT frames to avoid duplicates
-            for line in unsynced_lyrics:
-                if re.match(language_pattern, line):
-                    language == re.match(language_pattern, line).group(1)
-                else:
-                    language == "eng"
+            match_lang = language_pattern.search(unsynced_lyrics)
+            if match_lang:
+                language = match_lang.group(1)
+            else:
+                language = "eng"
             uslt_frame = USLT(encoding=Encoding.UTF8, lang=language, desc='', text=unsynced_lyrics)
             audio.tags.add(uslt_frame)
             changed = True
@@ -497,52 +449,60 @@ def embed_lyrics(file_path, lrc_path=None, txt_path=None, standardize=False, ove
     elif file_path.lower().endswith('.mp3'):
         embed_lyrics_mp3(file_path, lyrics, unsynced_lyrics, overwrite, results)
     else:
-        raise ValueError("Unsupported file format. Only FLAC and MP3 are supported.")
+        raise ValueError("Unsupported file format. Only FLAC and MP3 are supported in import mode.")
 
-def import_lyrics(match_categories_lrc={}, match_categories_txt={}, delete_files=False, standardize=False, progress=False, overwrite=False):
-    all_extensions = set(match_categories_lrc.keys()).union(set(match_categories_txt.keys()))
+def import_lyrics(match_categories, delete_files=False, standardize=False, progress=False, overwrite=False):
+    lrc_dict = match_categories.get("lrc", {})  # Dictionary holding lrc paths categorized by extension
+    txt_dict = match_categories.get("txt", {})  # Dictionary holding txt paths categorized by extension
+
+    all_extensions = set(lrc_dict.keys()).union(set(txt_dict.keys()))  # Get all unique extensions
+
     files_to_delete = []  # List to store files that need to be deleted
     combined_results = {"saved": [], "skipped": [], "deleted": [], "failed": [], "omitted_lines": []}
 
     for ext in all_extensions:
-        if ext == "mp3" or ext == "flac":
+        if ext in {"mp3", "flac"}:
             results = {"saved":[], "skipped": [], "failed": [], "omitted_lines": []}
-            lrc_paths = set(match_categories_lrc.get(ext, []))
-            txt_paths = set(match_categories_txt.get(ext, []))
-            with tqdm(total=len(lrc_paths | txt_paths), desc=f"embedding {ext}", unit=" files", disable=not progress) as pbar:
+            lrc_paths = set(lrc_dict.get(ext, []))  # Get LRC file paths for this extension
+            txt_paths = set(txt_dict.get(ext, []))  # Get TXT file paths for this extension
+
+            with tqdm(total=len(lrc_paths | txt_paths), desc=f"embedding {ext}", unit=" files", disable=not progress, ncols=100) as pbar:
                 for path in lrc_paths | txt_paths:
                     base_path = os.path.splitext(path)[0]
-                    lrc_path = base_path + '.lrc'
-                    txt_path = base_path + '.txt'
+                    lrc_path = base_path + '.lrc' if path in lrc_paths else None
+                    txt_path = base_path + '.txt' if path in txt_paths else None
+
                     try:
-                        if path in lrc_paths and path in txt_paths:
-                            embed_lyrics(path, lrc_path=lrc_path, txt_path=txt_path, standardize=standardize, overwrite=overwrite, results=results)
-                        elif path in lrc_paths:
-                            embed_lyrics(path, lrc_path=lrc_path, standardize=standardize, overwrite=overwrite, results=results)
-                        elif path in txt_paths:
-                            embed_lyrics(path, txt_path=txt_path, standardize=standardize, overwrite=overwrite, results=results)
+                        embed_lyrics(path, lrc_path=lrc_path, txt_path=txt_path, standardize=standardize, overwrite=overwrite, results=results)
+
                         # Add files to delete list if delete_files is True
                         if delete_files:
                             if lrc_path:
                                 files_to_delete.append(lrc_path)
                             if txt_path:
                                 files_to_delete.append(txt_path)
+
                     except Exception as e:
                         results["failed"].append({"path": path, "error": str(e)})
+
                     pbar.set_postfix({"saved": len(results["saved"]), "skipped": len(results["skipped"]), "failed": len(results["failed"])})
                     pbar.update(1)
+
                 combined_results["saved"].extend(results["saved"])
                 combined_results["skipped"].extend(results["skipped"])
                 combined_results["failed"].extend(results["failed"])
                 combined_results["omitted_lines"].extend(results["omitted_lines"])
-        else:
-            continue     
+
     # Delete files after processing all music files
     if delete_files:
         for file_path in set(files_to_delete):
-            os.remove(file_path)
-            combined_results["deleted"].append(file_path)
-    return combined_results
+            try: 
+                os.remove(file_path)
+                combined_results["deleted"].append(file_path)
+            except:
+                print(f"Failed to delete {file_path}.")
+
+    return combined_results  # Return final results
 
 def write_import_log(results, separate_logs, log_path):
     if not os.access(log_path, os.W_OK | os.X_OK):
@@ -559,6 +519,8 @@ def write_import_log(results, separate_logs, log_path):
                             log.write(result_path[0]+"\n")
                             for line in result_path[1]:
                                 log.write(f"\t{line}\n")
+                        elif isinstance(result_path, dict):
+                            log.write(f"path: {result_path["path"]} error: {result_path["error"]}")
                         else:
                             log.write(result_path+"\n")
                     log.write("\n")
@@ -576,7 +538,7 @@ def find_music_files(directory, extensions, single_folder, progress):
     music_files = []
 
     if not single_folder:
-        with tqdm(desc="searching music", unit=" files", disable=not progress) as pbar:
+        with tqdm(desc="searching music", unit=" files", disable=not progress, ncols=100) as pbar:
             songs = 0
             for root, dirs, files in os.walk(directory):
                 for file in files:
@@ -586,7 +548,7 @@ def find_music_files(directory, extensions, single_folder, progress):
                         songs += 1
                         pbar.set_postfix({"songs": songs})
     else:
-        with tqdm(desc="searching", unit=" files", disable=not progress) as pbar:
+        with tqdm(desc="searching", unit=" files", disable=not progress, ncols=100) as pbar:
             songs = 0
             for file in os.listdir(directory):
                 pbar.update(1)
@@ -603,17 +565,16 @@ def find_music_files(directory, extensions, single_folder, progress):
         sys.exit()
 
 # Extract lyrics from MP3 and FLAC files
-def extract_lyrics(file_paths, progress, standardize):
-    synced_lyrics = []
-    unsynced_lyrics = []
-    with tqdm(total=len(file_paths), desc="extracting lyrics", unit=" lyrics", disable=not progress) as pbar:
+def extract_lyrics(music_files, progress, standardize):
+    all_lyrics = {"synced": [], "unsynced": []}
+    with tqdm(total=len(music_files), desc="extracting lyrics", unit=" lyrics", disable=not progress, ncols=100) as pbar:
         synced_count = 0
         unsynced_count = 0
-        for file_path in file_paths:
+        for file_path in music_files:
             if file_path.lower().endswith(".mp3"):
-                synced, unsynced = process_mp3(file_path, synced_lyrics, unsynced_lyrics, standardize)
+                synced, unsynced = process_mp3(file_path=file_path, all_lyrics=all_lyrics, standardize=standardize)
             elif file_path.lower().endswith(".flac"):
-                synced, unsynced = process_flac(file_path, synced_lyrics, unsynced_lyrics, standardize)
+                synced, unsynced = process_flac(file_path=file_path, all_lyrics=all_lyrics, standardize=standardize)
             else:
                 continue
             
@@ -624,7 +585,7 @@ def extract_lyrics(file_paths, progress, standardize):
             
             pbar.set_postfix({"synced": synced_count, "unsynced": unsynced_count})
             pbar.update(1)
-    return synced_lyrics, unsynced_lyrics
+    return all_lyrics
 
 # Function to extract and format SYLT to LRC style
 def extract_sylt_to_lrc(sylt_frame):
@@ -644,12 +605,12 @@ def extract_sylt_to_lrc(sylt_frame):
             timestamp_formatted = f'[{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}]'
         else:
             timestamp_formatted = f'[{minutes:02}:{seconds:02}.{milliseconds:03}]'
-        lrc_line = f"{timestamp_formatted}{text}" # change "{lrc_timestamp}{text}" to "{lrc_timestamp} {text}" if you want "[00:00.00] text"
+        lrc_line = f"{timestamp_formatted}{text}" # change "{lrc_timestamp}{text}" to "{lrc_timestamp} {text}" if you want "[00:00.000] text"
         lrc_lines.append(lrc_line)
     lrc_content = "\n".join(lrc_lines)
     return lrc_content
 
-def process_mp3(file_path, synced_lyrics, unsynced_lyrics, standardize):
+def process_mp3(file_path, all_lyrics, standardize):
     audio = MP3(file_path, ID3=ID3)
     synced = False
     unsynced = False
@@ -664,7 +625,7 @@ def process_mp3(file_path, synced_lyrics, unsynced_lyrics, standardize):
             lrc_content = extract_sylt_to_lrc(tag)
             
             # Append tuple with file_path, LRC content, language, and description
-            synced_lyrics.append((file_path, lrc_content, lang, desc))
+            all_lyrics["synced"].append((file_path, lrc_content, lang, desc))
             synced = True
 
         elif isinstance(tag, USLT):
@@ -673,22 +634,22 @@ def process_mp3(file_path, synced_lyrics, unsynced_lyrics, standardize):
             desc = None
             
             # Append tuple with file_path, lyrics, and language
-            unsynced_lyrics.append((file_path, tag.text, lang, desc))
+            all_lyrics["unsynced"].append((file_path, tag.text, lang, desc))
             unsynced = True
 
         elif isinstance(tag, TXXX) and tag.desc == "LYRICS":
             lyrics = tag.text[0]
             if standardize:
                 lyrics = standardize_timestamps(lyrics, standardize)
-                
+            
             # For TXXX, there's no language field, so we append None for language
-            synced_lyrics.append((file_path, lyrics, None, None))
+            all_lyrics["synced"].append((file_path, lyrics, None, None))
             synced = True
 
     return synced, unsynced
 
 # Extract lyrics from FLAC files
-def process_flac(file_path, synced_lyrics, unsynced_lyrics, standardize):
+def process_flac(file_path, all_lyrics, standardize):
     audio = FLAC(file_path)
     synced = False
     unsynced = False
@@ -696,10 +657,10 @@ def process_flac(file_path, synced_lyrics, unsynced_lyrics, standardize):
         lyrics = audio["LYRICS"][0]
         if standardize:
             lyrics = standardize_timestamps(lyrics, standardize)
-        synced_lyrics.append((file_path, lyrics, None, None))
+        all_lyrics["synced"].append((file_path, lyrics, None, None))
         synced = True
     if "UNSYNCEDLYRICS" in audio:
-        unsynced_lyrics.append((file_path, audio["UNSYNCEDLYRICS"][0], None, None))
+        all_lyrics["unsynced"].append((file_path, audio["UNSYNCEDLYRICS"][0], None, None))
         unsynced = True
     return synced, unsynced
 
@@ -786,41 +747,46 @@ def standardize_timestamps(lyrics, standardize):
     return lyrics
 
 # Export embedded lyrics to .lrc and .txt files
-def write_lrc_files(lyrics, extension, overwrite, progress, write_success):
-    with tqdm(total = len(lyrics), desc=f"saving {extension}", unit=f" {extension} files", disable=not progress) as pbar:
-        saved = 0
-        skipped = 0
-        failed = 0
-        for filename, lyrics, lang, desc in lyrics:
-            pbar.update(1)
-            basename = os.path.splitext(filename)[0]
-            lyrics_filename = basename + extension
-            language_pattern = re.compile(r'\[la: *(\w{2,3})\]')
-            if extension == ".lrc" and lang is not None:
-                if re.search(language_pattern, lyrics):
-                    lyrics = re.sub(language_pattern, f"[la:{lang}]", lyrics)
+def write_lyric_files(all_lyrics, export_results, overwrite, progress, write_success):
+    for lyrics_type, lyrics in all_lyrics.items():
+        extension = "lrc" if lyrics_type == "synced" else "txt"
+        with tqdm(total = len(lyrics), desc=f"saving {extension}", unit=f" {extension} files", disable=not progress, ncols=100) as pbar:
+            language_pattern = re.compile(r'^\[la: *(\w{2,3})\]$', re.IGNORECASE | re.MULTILINE)
+            saved = 0
+            skipped = 0
+            failed = 0
+            for filename, lyrics, lang, desc in lyrics:
+                pbar.update(1)
+                basename = os.path.splitext(filename)[0]
+                lyrics_filename = f"{basename}.{extension}"
+                # Update existing language in the text if one was in the tag
+                if extension == ".lrc" and lang:
+                    if re.search(language_pattern, lyrics):
+                        lyrics = re.sub(language_pattern, f"[la:{lang}]", lyrics)
+                    else:
+                        lyrics = f"[la:{lang}]\n" + lyrics
+                lyrics = '\n'.join(line.strip() for line in lyrics.split('\r\n'))
+                if not os.path.exists(lyrics_filename) or overwrite:
+                    try:
+                        with open(lyrics_filename, 'w', encoding="utf-8") as f:
+                            f.write(lyrics)
+                        write_success["saved"].append((filename, extension))
+                        saved += 1
+                        pbar.set_postfix({"saved": saved, "skipped": skipped})
+                    except PermissionError:
+                        write_success["failed"].append((filename, extension))
+                        failed += 1
+                        print(f"Failed to write {lyrics_filename} due to missing write permissions.")
                 else:
-                    lyrics = f"[la:{lang}]\n" + lyrics
-            lyrics = '\n'.join(line.strip() for line in lyrics.split('\r\n'))
-            if not os.path.exists(lyrics_filename) or overwrite:
-                try:
-                    with open(lyrics_filename, 'w', encoding="utf-8") as f:
-                        f.write(lyrics)
-                    write_success["saved"].append((filename, extension))
-                    saved += 1
+                    write_success["skipped"].append((filename, extension))
+                    skipped += 1
                     pbar.set_postfix({"saved": saved, "skipped": skipped})
-                except PermissionError:
-                    write_success["failed"].append((filename, extension))
-                    failed += 1
-                    print(f"Failed to write {lyrics_filename} due to missing write permissions.")
-            else:
-                write_success["skipped"].append((filename, extension))
-                skipped += 1
-                pbar.set_postfix({"saved": saved, "skipped": skipped})
-    return saved, skipped, failed
+        export_results[f"{extension}_saved"] += saved
+        export_results[f"{extension}_failed"] += failed
+        export_results[f"{extension}_skipped"] += skipped
 
 # Remove embedded lyrics tags from files
-def purge_tags(write_success, progress):
+def purge_tags(write_success, export_results, progress):
     saved_list = [filepath for filepath, _ in write_success["saved"]]
     skipped_list = [filepath for filepath, _ in write_success["skipped"]]
     failed_list = [filepath for filepath, _ in write_success["failed"]]
@@ -829,7 +795,7 @@ def purge_tags(write_success, progress):
     # Filter out "failed" file paths and remove duplicates
     delete_me = [filepath for filepath in combined_list if filepath not in failed_list and (filepath not in seen and seen.add(filepath) is None)]
     if len(delete_me) > 0:
-        with tqdm(total=len(delete_me), desc="purging embedded lyrics", unit=" files", disable=not progress) as pbar:
+        with tqdm(total=len(delete_me), desc="purging embedded lyrics", unit=" files", disable=not progress, ncols=100) as pbar:
             purged = 0
             failed = 0
             for file_path in delete_me:
@@ -867,7 +833,8 @@ def purge_tags(write_success, progress):
                     pbar.set_postfix({"purged": purged, "failed": failed})
                     pbar.update(1)                         
                     continue
-        return purged, failed
+        export_results["purged"] += purged
+        export_results["failed"] += failed
 
 # Log the results of the export to disk
 def export_log(write_success, separate_logs, log_path):
@@ -938,9 +905,9 @@ def get_tags(file_path, extension):
 
     return tags
 
-def rewrite_external_lyrics(lrc_path, lyrics, tags, results, standardize):
+def rewrite_external_lyrics(lyrics_path, lyrics, tags, results, standardize):
     original_lyrics = lyrics
-    if standardize and os.path.splitext(lrc_path)[1] == ".lrc":
+    if standardize and os.path.splitext(lyrics_path)[1] == ".lrc":
         lyrics = standardize_timestamps(lyrics, standardize)
     # Regular expression patterns to match all tag types
     patterns = {
@@ -998,17 +965,17 @@ def rewrite_external_lyrics(lrc_path, lyrics, tags, results, standardize):
 
     # If nothing changed, don't rewrite the lyrics
     if original_lyrics == updated_lyrics:
-        results["skipped"].append(lrc_path)
+        results["skipped"].append(lyrics_path)
         return
 
     # Write updated lyrics back to the file
     try:
-        with open(lrc_path, 'w', encoding='utf-8') as file:
+        with open(lyrics_path, 'w', encoding='utf-8') as file:
             file.write(updated_lyrics)
-        results["fixed"].append(lrc_path)
+        results["fixed"].append(lyrics_path)
     except PermissionError:
-        results["failed"].append(lrc_path)
-        print(f"Could not open {lrc_path} for writing.")
+        results["failed"].append(lyrics_path)
+        print(f"Could not open {lyrics_path} for writing.")
 
 def write_tag_external_log(results, separate_logs, log_path):
     if not os.access(log_path, os.W_OK | os.X_OK):
@@ -1026,7 +993,7 @@ def write_tag_external_log(results, separate_logs, log_path):
     else:
         for category in categories:
             if len(results[category]) > 0:
-                with open(os.path.join(log_path, f"lyrict_import_{category}.log"), "w", encoding="utf8") as log:
+                with open(os.path.join(log_path, f"lyrict_tag_external_{category}.log"), "w", encoding="utf8") as log:
                     for result_path in sorted(set(results[category])):
                         log.write(f"{result_path}\n")
         
@@ -1047,217 +1014,92 @@ def main(args):
     mp3tag = args.mp3tag_mode
     standardize = args.standardize
 
+    # Find lyrics files for modes that require them
+    if test_run or mp3tag or import_mode or tag_external_mode:
+        lyrics_files = find_lyrics_files(directory=directory, single_folder=single_folder, progress=progress)
+
     if test_run:
-        lrc_paths, txt_paths = find_lrc_files(directory, single_folder, progress)
-        if lrc_paths and txt_paths:
-            match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
-            match_categories_txt = find_matches(txt_paths, "txt", extensions, progress)
-            if log_to_disk:
-                write_log(match_categories_lrc, "lrc", separate_logs, log_path)
-                write_log(match_categories_txt, "txt", separate_logs, log_path)
-            errors = False
-            if "unlinked" in match_categories_lrc.keys():
-                print(f"LRC files without linked songs found:")
-                for file_path in match_categories_lrc["unlinked"]:
-                    print(file_path)
+        match_categories = find_matches(lyrics_files=lyrics_files, extensions=extensions, progress=progress)
+        if log_to_disk:
+            write_log(match_categories=match_categories, separate_logs=separate_logs, log_path=log_path)
+        errors = False
+        for lyrics_type, audio_types in match_categories.items():
+            if "unlinked" in audio_types:
+                print(f"{lyrics_type.upper()} files without linked songs found:")
+                for path in match_categories[lyrics_type]["unlinked"]:
+                    print(path)
                 errors = True
-            if "unlinked" in match_categories_txt.keys():
-                print(f"TXT files without linked songs found:")
-                for file_path in match_categories_txt["unlinked"]:
-                    print(file_path)
-                errors = True
-            if errors:
-                print("Unlinked lyrics found. Closing in 5 seconds.")
-                sleep(5)
-                sys.exit()
-            else:
-                print(f"No unlinked lyrics files found, closing in 5 seconds.")
-                sleep(5)
-                sys.exit()
-        elif lrc_paths and not txt_paths:
-            match_categories = find_matches(lrc_paths, "lrc", extensions, progress)
-            if log_to_disk:
-                write_log(match_categories, "lrc", separate_logs, log_path)
-            if "unlinked" in match_categories.keys():
-                print("LRC files without linked songs found:")
-                for file_path in match_categories["unlinked"]:
-                    print(file_path)
-                print("Closing in 5 seconds.")
-                sleep(5)
-                sys.exit()
-            else:
-                print(f"No unlinked LRC files found, closing in 5 seconds.")
-                sleep(5)
-                sys.exit()
-        elif not lrc_paths and txt_paths:
-            match_categories = find_matches(txt_paths, "txt", extensions, progress)
-            if log_to_disk:
-                write_log(match_categories, "txt", separate_logs, log_path)
-            if "unlinked" in match_categories.keys():
-                print("TXT files without linked songs found:")
-                for file_path in match_categories["unlinked"]:
-                    print(file_path)
-                print("Closing in 5 seconds.")
-                sleep(5)
-                sys.exit()
-            else:
-                print(f"No unlinked LRC files found, closing in 5 seconds.")
-                sleep(5)
-                sys.exit()
-
-    if mp3tag:
-        action_folder = os.path.join(os.getenv('APPDATA')+"\\Mp3tag\\data\\actions\\")
-        lrc_paths, txt_paths = find_lrc_files(directory, single_folder, progress)
-        if lrc_paths and txt_paths:
-            match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
-            match_categories_txt = find_matches(txt_paths, "txt", extensions, progress)
-            if log_to_disk:
-                write_log(match_categories_lrc, "lrc", separate_logs, log_path)
-                write_log(match_categories_txt, "txt", separate_logs, log_path)
-            mp3tag_flow_both(match_categories_lrc, match_categories_txt, action_folder, overwrite, extensions)
-        elif lrc_paths and not txt_paths:
-            match_categories = find_matches(lrc_paths, "lrc", extensions, progress)
-            if log_to_disk:
-                write_log(match_categories, "lrc", separate_logs, log_path)
-            mp3tag_flow_single(match_categories, action_folder, overwrite, extensions, "lrc")
-        elif not lrc_paths and txt_paths:
-            match_categories = find_matches(txt_paths, "txt", extensions, progress)
-            if log_to_disk:
-                write_log(match_categories, "txt", separate_logs, log_path)
-            mp3tag_flow_single(match_categories, action_folder, overwrite, extensions, "txt")
-
-    if import_mode:
-        lrc_paths, txt_paths = find_lrc_files(directory, single_folder, progress)
-        if lrc_paths and txt_paths:
-            match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
-            match_categories_txt = find_matches(txt_paths, "txt", extensions, progress)
-            results = import_lyrics(match_categories_lrc=match_categories_lrc,
-                                    match_categories_txt=match_categories_txt,
-                                    delete_files=delete,
-                                    standardize=standardize,
-                                    progress=progress,
-                                    overwrite=overwrite)
-            if log_to_disk:
-                write_import_log(results, separate_logs, log_path)
-            saved = len(results["saved"])
-            skipped = len(results["skipped"])
-            failed = len(results["failed"])
-            deleted = len(results["deleted"])
-            omitted = len(results["omitted_lines"])
-            print(f"{saved} embedded, {skipped} skipped, {omitted} files with omitted lines, {failed} failed, {deleted} external lyrics deleted.")
-        elif lrc_paths and not txt_paths:
-            match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
-            results = import_lyrics(match_categories_lrc=match_categories_lrc,
-                                    delete_files=delete,
-                                    standardize=standardize,
-                                    progress=progress,
-                                    overwrite=overwrite)
-            if log_to_disk:
-                write_import_log(results, separate_logs, log_path)
-            saved = len(results["saved"])
-            skipped = len(results["skipped"])
-            failed = len(results["failed"])
-            deleted = len(results["deleted"])
-            omitted = len(results["omitted_lines"])
-            print(f"{saved} embedded, {skipped} skipped, {omitted} files with omitted lines, {failed} failed, {deleted} external lyrics deleted.")
-        elif not lrc_paths and txt_paths:
-            match_categories_txt = find_matches(lrc_paths, "txt", extensions, progress)
-            results = import_lyrics(match_categories_txt=match_categories_txt,
-                                    delete_files=delete,
-                                    standardize=standardize,
-                                    progress=progress,
-                                    overwrite=overwrite)
-            if log_to_disk:
-                write_import_log(results, separate_logs, log_path)
-            saved = len(results["saved"])
-            skipped = len(results["skipped"])
-            failed = len(results["failed"])
-            deleted = len(results["deleted"])
-            print(f"{saved} embedded, {skipped} skipped, {failed} failed, {deleted} external lyrics deleted.")
-            print("Closing in 5 seconds.")
+        if errors:
+            print("Unlinked lyrics found. Closing in 5 seconds.")
+            sleep(5)
+            sys.exit()
+        else:
+            print(f"No unlinked lyrics files found, closing in 5 seconds.")
             sleep(5)
             sys.exit()
 
-    if export_mode:
-        music_files = find_music_files(directory, extensions, single_folder, progress)
-        synced_lyrics, unsynced_lyrics = extract_lyrics(music_files, progress, standardize)
-        write_success = {"saved":[], "skipped":[], "failed":[]}
-        lrc_saved = 0
-        lrc_skipped = 0
-        lrc_failed = 0
-        txt_saved = 0
-        txt_skipped = 0
-        txt_failed = 0
-        purged = 0
-        failed = 0
-        if len(synced_lyrics) > 0:
-            lrc_saved, lrc_skipped, lrc_failed = write_lrc_files(synced_lyrics, ".lrc", overwrite, progress, write_success)
-        if len(unsynced_lyrics) > 0:
-            txt_saved, txt_skipped, lrc_failed = write_lrc_files(unsynced_lyrics, ".txt", overwrite, progress, write_success)
-        
+    if mp3tag:
+        action_folder = os.path.join(os.getenv('APPDATA')+"\\Mp3tag\\data\\actions\\")
+        match_categories = find_matches(lyrics_files=lyrics_files, extensions=extensions, progress=progress)
         if log_to_disk:
-            export_log(write_success, separate_logs, log_path)
+            write_log(match_categories=match_categories, separate_logs=separate_logs, log_path=log_path)
+        mp3tag_open_songs(match_categories=match_categories, action_folder=action_folder, overwrite=overwrite)
+
+    if import_mode:
+        match_categories = find_matches(lyrics_files=lyrics_files, extensions=extensions, progress=progress)
+        results = import_lyrics(match_categories=match_categories, delete_files=delete, standardize=standardize, progress=progress, overwrite=overwrite)
+        if log_to_disk:
+            write_import_log(results=results, separate_logs=separate_logs, log_path=log_path)
+        # Assign the counts for the human readable output.
+        saved, skipped, failed, deleted, omitted = map(len, (results["saved"], results["skipped"], results["failed"], results["deleted"], results["omitted_lines"]))
+        print(f"{saved} embedded, {skipped} skipped, {omitted} files with omitted lines, {failed} failed, {deleted} external lyrics deleted.")
+        print("Closing in 5 seconds.")
+        sleep(5)
+        sys.exit()
+
+    if export_mode:
+        music_files = find_music_files(directory=directory, extensions=extensions, single_folder=single_folder, progress=progress)
+        all_lyrics = extract_lyrics(music_files=music_files, progress=progress, standardize=standardize)
+        write_success = {"saved":[], "skipped":[], "failed":[]}
+
+        export_results = defaultdict(int)
+
+        if all_lyrics["synced"] or all_lyrics["unsynced"]:
+            write_lyric_files(all_lyrics=all_lyrics, export_results=export_results, overwrite=overwrite, progress=progress, write_success=write_success)
+          
+        if log_to_disk:
+            export_log(write_success=write_success, separate_logs=separate_logs, log_path=log_path)
 
         if delete:
-            purged, failed = purge_tags(write_success, progress)
+            purge_tags(write_success=write_success, export_results=export_results, progress=progress)
         
-        print(f"\n{len(music_files)} music files processed, {len(synced_lyrics)} synced lyrics and {len(unsynced_lyrics)} unsynced lyrics found.")
-        if lrc_saved > 0 or lrc_skipped > 0 or lrc_failed > 0:
-            print(f"{lrc_saved} synced lyrics written to disk, {lrc_skipped} skipped, {lrc_failed} errors.")
-        if txt_saved > 0 or txt_skipped > 0 or lrc_failed > 0:
-            print(f"{txt_saved} unsynced lyrics written to disk, {txt_skipped} skipped., {txt_failed} errors.")
-        if purged > 0 or failed > 0:
-            print(f"Deleted embedded lyrics of {purged} files, encountered {failed} errors.")
+        print(f"\n{len(music_files)} music files processed, {len(all_lyrics["synced"])} synced lyrics and {len(all_lyrics["unsynced"])} unsynced lyrics found.")
+        if any(export_results[key] > 0 for key in ("lrc_saved", "lrc_skipped", "lrc_failed")):
+            print(f"{export_results["lrc_saved"]} synced lyrics written to disk, {export_results["lrc_skipped"]} skipped, {export_results["lrc_failed"]} errors.")
+        if any(export_results[key] > 0 for key in ("txt_saved", "txt_skipped", "txt_failed")):
+            print(f"{export_results["txt_saved"]} unsynced lyrics written to disk, {export_results["txt_skipped"]} skipped, {export_results["txt_failed"]} errors.")
+        if export_results["purged"] > 0 or export_results["failed"] > 0:
+            print(f"Deleted embedded lyrics of {export_results["purged"]} files, encountered {export_results["failed"]} errors.")
         print("Closing in 5 seconds.")
         sleep(5)
         sys.exit()
 
     if tag_external_mode:
-        lrc_paths, txt_paths = find_lrc_files(directory, single_folder, progress)
         supported_extensions = ["mp3", "flac"]
+        match_categories = find_matches(lyrics_files=lyrics_files, extensions=supported_extensions, progress=progress)
         results = {"fixed":[], "skipped":[], "failed":[]}
-        if lrc_paths and txt_paths:
-            match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
-            match_categories_txt = find_matches(txt_paths, "txt", extensions, progress)
-            for extension in supported_extensions:
-                if extension in match_categories_lrc:
-                    with tqdm(total = len(match_categories_lrc[extension]), desc= f"fixing {extension} lrcs", unit=f" lrc files", disable=not progress) as pbar:
-                        for song_path in match_categories_lrc[extension]:
-                            lrc_path = os.path.splitext(song_path)[0] + ".lrc"
-                            lyrics = read_lyrics(lrc_path)
-                            tags = get_tags(song_path, extension)
-                            rewrite_external_lyrics(lrc_path, lyrics, tags, results, standardize)
+
+        for lyrics_type, audio_types in match_categories.items():
+            for ext in supported_extensions:
+                if ext in audio_types:
+                    with tqdm(total = len(audio_types[ext]), desc= f"fixing {ext} {lyrics_type}s", unit=f" {lyrics_type} files", disable=not progress, ncols=100) as pbar:
+                        for song_path in audio_types[ext]:
+                            lyrics_path = os.path.splitext(song_path)[0] + f".{lyrics_type}"
+                            lyrics = read_lyrics(lyrics_path)
+                            tags = get_tags(file_path=song_path, extension=ext)
+                            rewrite_external_lyrics(lyrics_path=lyrics_path, lyrics=lyrics, tags=tags, results=results, standardize=standardize)
                             pbar.update(1)
-                if extension in match_categories_txt:
-                    with tqdm(total = len(match_categories_txt[extension]), desc= f"fixing {extension} txts", unit=f" txt files", disable=not progress) as pbar:
-                        for song_path in match_categories_txt[extension]:
-                            txt_path = os.path.splitext(song_path)[0] + ".txt"
-                            lyrics = read_lyrics(txt_path)
-                            tags = get_tags(song_path, extension)
-                            rewrite_external_lyrics(txt_path, lyrics, tags, results, standardize)
-                            pbar.update(1)
-        elif lrc_paths and not txt_paths:
-            match_categories_lrc = find_matches(lrc_paths, "lrc", extensions, progress)
-            for extension in supported_extensions:
-                if extension in match_categories_lrc:
-                    with tqdm(total = len(match_categories_lrc[extension]), desc= f"fixing {extension} lrcs", unit=f" lrc files", disable=not progress) as pbar:
-                        for song_path in match_categories_lrc[extension]:
-                            lrc_path = os.path.splitext(song_path)[0] + ".lrc"
-                            lyrics = read_lyrics(lrc_path)
-                            tags = get_tags(song_path, extension)
-                            rewrite_external_lyrics(lrc_path, lyrics, tags, results, standardize)
-                            pbar.update(1)
-        elif not lrc_paths and txt_paths:
-            match_categories_txt = find_matches(lrc_paths, "txt", extensions, progress)
-            for extension in supported_extensions:
-                if extension in match_categories_txt:
-                    with tqdm(total = len(match_categories_txt[extension]), desc= f"fixing {extension} txts", unit=f" txt files", disable=not progress) as pbar:
-                        for song_path in match_categories_lrc[extension]:
-                            txt_path = os.path.splitext(song_path)[0] + ".txt"
-                            lyrics = read_lyrics(txt_path)
-                            tags = get_tags(song_path, extension)
-                            rewrite_external_lyrics(txt_path, lyrics, tags, results, standardize)
-                            pbar.update(1)
+
         fixed = len(set(results["fixed"]))
         skipped = len(set(results["skipped"]))
         failed = len(set(results["failed"]))
@@ -1267,12 +1109,13 @@ def main(args):
         print("Closing in 5 seconds.")
         sleep(5)
         sys.exit()
+
 if __name__ == "__main__":
     args = parse_arguments()
     try:
         main(args)
     except KeyboardInterrupt:
-        print("Interrupted")
+        print("Interrupted, exiting.")
         try:
             sys.exit(130)
         except SystemExit:
